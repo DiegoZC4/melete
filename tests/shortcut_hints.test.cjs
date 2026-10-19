@@ -104,6 +104,130 @@ test('different tips are separated by at least a minute', () => {
   assert.equal(tracker.eligible('reset-row'), true);
 });
 
+test('Vol and Pan hold tips are offered once each and retired by using the hold', () => {
+  const { tracker, writes, advance } = fixture();
+  assert.deepEqual(plain(tracker.hold('vol', 2, 'touch')), { id:'vol-hold', row:'vol', part:2, input:'touch' });
+  assert.deepEqual(plain(tracker.hold('pan', 1)), { id:'pan-hold', row:'pan', part:1, input:'mouse' });
+  assert.equal(tracker.hold('see', 0), null, 'only Vol and Pan teach a hold this way');
+  assert.equal(tracker.shown('vol-hold'), true);
+  assert.equal(tracker.hold('vol', 0), null, 'a tip appears once');
+  assert.equal(tracker.hold('pan', 1), null, 'and a minute passes before the next one');
+  advance(60000);
+  assert.ok(tracker.hold('pan', 1));
+  tracker.learn('pan-hold');
+  assert.equal(tracker.hold('pan', 1), null, 'holding the dial first means its tip is never needed');
+  assert.deepEqual(writes.at(-1).sort(), ['pan-hold', 'vol-hold']);
+  const reloaded = fixture(writes.at(-1)).tracker;
+  assert.equal(reloaded.hold('vol', 0), null);
+  assert.equal(reloaded.hold('pan', 0), null);
+});
+
+test('songs sharing the record never repeat or drop what another song learned', () => {
+  let stored = [];
+  const song = () => new Tracker({ now: () => 0, read: () => stored, write: (value) => { stored = plain(value); } });
+  const autumn = song(), seed = song();
+  assert.ok(seed.hold('vol', 0));
+  autumn.learn('vol-hold');
+  assert.equal(seed.hold('vol', 0), null, 'learned in one song, quiet in the other');
+  seed.learn('pan-hold');
+  assert.deepEqual([...stored].sort(), ['pan-hold', 'vol-hold'], 'a later write keeps the other song’s entry');
+  stored = [...stored, 'bogus', 7, null];
+  song().learn('isolate');
+  assert.deepEqual([...stored].sort(), ['isolate', 'pan-hold', 'vol-hold'], 'unknown entries are dropped, known ones kept');
+});
+
+test('hold tips describe the existing cycles in the wording of the input used', () => {
+  const start = app.indexOf('  function shortcutTipContent(');
+  const content = vm.runInNewContext(`${app.slice(start, app.indexOf('\n  }', start) + 4)}\nshortcutTipContent`, {
+    parts: [{ name:'Soprano', short:'S' }, { name:'Alto', short:'A' }],
+    elements: { mixer: { querySelector: (selector) => ({ selector }) } },
+  });
+  const vol = content({ id:'vol-hold', row:'vol', part:1, input:'touch' });
+  assert.equal(vol.target.selector, '[data-volume-index="1"]');
+  assert.equal(vol.message, 'Press and hold Alto’s volume to emphasize Alto (others 20%). '
+    + 'Hold again to reduce Alto to 20%; a third time sets all voices to 100%.');
+  assert.equal(content({ id:'vol-hold', row:'vol', part:0, input:'keyboard' }).message,
+    'Press Shift+Enter on Soprano’s volume to emphasize Soprano (others 20%). '
+    + 'Repeat to reduce Soprano to 20%; a third time sets all voices to 100%.');
+  const pan = content({ id:'pan-hold', row:'pan', part:0, input:'mouse' });
+  assert.equal(pan.target.selector, '[data-pan-index="0"]');
+  assert.equal(pan.message, 'Press and hold Soprano’s pan to put Soprano right and the other parts left. '
+    + 'Hold again to center all parts.');
+  assert.equal(content({ id:'vol-hold', row:'vol', part:5, input:'mouse' }), null, 'a part that no longer exists has no tip');
+});
+
+function deferralFixture() {
+  const listeners = {}, timers = [], toast = new Set();
+  let shown = 0;
+  const target = { getBoundingClientRect: () => ({ left:10, top:10, right:58, bottom:34, width:48, height:24 }),
+    classList: { add() {} }, getAttribute: () => null, setAttribute() {} };
+  const c = vm.createContext({
+    document: { hidden:false, addEventListener: (type, fn) => { listeners[type] = fn; } },
+    window: { innerWidth:400, innerHeight:800, addEventListener: (type, fn) => { listeners[type] = fn; },
+      setTimeout: (fn) => timers.push(fn), clearTimeout: (id) => { if (id) timers[id - 1] = null; } },
+    elements: { partChooser: { hidden:true }, toast: { classList: { contains: (name) => toast.has(name) } },
+      shortcutTip: { hidden:true, style:{}, classList: { add() {} }, getBoundingClientRect: () => ({ width:200, height:40 }) },
+      shortcutTipMessage: {} },
+    settingsHelpEnabled: false, shortcutTipTimer: 0, shortcutTipLifetime: 0, shortcutTipTarget: null,
+    clamp: (value, low, high) => Math.min(high, Math.max(low, value)),
+    shortcutHints: { eligible: () => true, shown: () => { shown++; return true; } },
+    shortcutTipContent: () => ({ target, message:'Hold it.' }), hideShortcutTip() {},
+  });
+  vm.runInContext(app.slice(app.indexOf('  const heldPointers = new Set();'),
+    app.indexOf('  elements.shortcutTipDismiss.addEventListener')), c);
+  return { c, toast, shown: () => shown,
+    fire: (type, event = {}) => listeners[type](event),
+    queue: () => c.queueShortcutTip({ id:'vol-hold', row:'vol', part:0, input:'touch' }),
+    // Runs the pending tip timer, as the browser would once its delay passes.
+    tick() { const index = timers.findLastIndex(Boolean); if (index < 0) return false; const fn = timers[index]; timers[index] = null; fn(); return true; },
+  };
+}
+
+test('a due tip waits for a held pointer, an open part chooser or an Undo message', () => {
+  const held = deferralFixture();
+  held.fire('pointerdown', { pointerId:3 });
+  held.queue(); held.tick(); held.tick();
+  assert.equal(held.shown(), 0, 'never during a drag or audition');
+  held.fire('pointerup', { pointerId:3 });
+  held.tick();
+  assert.equal(held.shown(), 1);
+  assert.equal(held.c.elements.shortcutTip.hidden, false);
+
+  const chooser = deferralFixture();
+  chooser.c.elements.partChooser.hidden = false;
+  chooser.queue(); chooser.tick();
+  assert.equal(chooser.shown(), 0);
+  chooser.c.elements.partChooser.hidden = true;
+  chooser.tick();
+  assert.equal(chooser.shown(), 1);
+
+  const undo = deferralFixture();
+  undo.toast.add('has-action'); undo.toast.add('is-visible');
+  undo.queue(); undo.tick();
+  assert.equal(undo.shown(), 0);
+  undo.toast.delete('has-action');
+  undo.tick();
+  assert.equal(undo.shown(), 1, 'an ordinary message does not hold a tip back');
+
+  const blurred = deferralFixture();
+  blurred.fire('pointerdown', { pointerId:1 });
+  blurred.fire('blur');
+  blurred.queue(); blurred.tick();
+  assert.equal(blurred.shown(), 1, 'a pointer released outside the window is not held forever');
+});
+
+test('a tip that keeps waiting is dropped and stays eligible for a later moment', () => {
+  const f = deferralFixture();
+  f.fire('pointerdown', { pointerId:9 });
+  f.queue();
+  let ticks = 0;
+  while (f.tick()) ticks++;
+  assert.equal(ticks, 13, 'about eight seconds of 650 ms waits');
+  f.fire('pointerup', { pointerId:9 });
+  assert.equal(f.tick(), false);
+  assert.equal(f.shown(), 0, 'it was never marked as shown');
+});
+
 test('corrupt or blocked local storage does not affect practice controls', () => {
   const tracker = new Tracker({ read() { throw Error('blocked'); }, write() { throw Error('blocked'); } });
   assert.doesNotThrow(() => tracker.learn('isolate'));

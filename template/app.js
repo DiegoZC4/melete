@@ -168,6 +168,8 @@
   let settingsHelpEnabled = false;
   let settingsTooltipTarget = null;
   let settingsTooltipTimer = 0;
+  let partChooserKey = "";
+  let pendingPartLink = null;
 
   const elements = {
     transport: document.querySelector(".transport"),
@@ -212,6 +214,11 @@
     toast: document.getElementById("toast"),
     toastMessage: document.getElementById("toastMessage"),
     toastUndo: document.getElementById("toastUndo"),
+    partChooser: document.getElementById("partChooser"),
+    partChooserOptions: document.getElementById("partChooserOptions"),
+    partChooserNote: document.getElementById("partChooserNote"),
+    partChooserDismiss: document.getElementById("partChooserDismiss"),
+    scrubLabel: document.getElementById("scrubLabel"),
   };
 
   function clamp(value, minimum, maximum) {
@@ -354,28 +361,47 @@
   class ShortcutHintTracker {
     constructor({ now = () => Date.now(), read = () => [], write = () => {} } = {}) {
       this.now = now;
+      this.read = read;
       this.write = write;
       this.handled = new Set();
-      try {
-        const stored = read();
-        if (Array.isArray(stored)) stored.forEach((id) => {
-          if (["isolate", "reset-row"].includes(id)) this.handled.add(id);
-        });
-      } catch {}
+      this.sync();
       this.history = new Map();
       this.lastShown = -Infinity;
+    }
+
+    // One record serves every song, and a collection runs its songs side by
+    // side, so re-read it before deciding or writing rather than trusting the
+    // copy this page started with: a tip seen in one song stays seen in the
+    // other, and neither page's write can drop what the other learned.
+    sync() {
+      try {
+        const stored = this.read();
+        if (Array.isArray(stored)) stored.forEach((id) => {
+          if (["isolate", "reset-row", "vol-hold", "pan-hold"].includes(id)) this.handled.add(id);
+        });
+      } catch {}
     }
 
     clear() { this.history.clear(); }
 
     learn(id) {
+      this.sync();
       this.handled.add(id);
       this.clear();
       try { this.write([...this.handled]); } catch {}
     }
 
     eligible(id) {
+      this.sync();
       return !this.handled.has(id) && this.now() - this.lastShown >= 60000;
+    }
+
+    // The first finished Vol or Pan drag, or choosing a part, is when holding
+    // that control is worth a mention; a hold already performed has taught it.
+    hold(row, index, input = "mouse") {
+      const id = `${row}-hold`;
+      if (!["vol-hold", "pan-hold"].includes(id) || !this.eligible(id)) return null;
+      return { id, row, part: index, input };
     }
 
     shown(id) {
@@ -448,6 +474,20 @@
   }
 
   function shortcutTipContent(hint) {
+    if (hint.id === "vol-hold" || hint.id === "pan-hold") {
+      const volumes = hint.id === "vol-hold";
+      const part = parts[hint.part];
+      const target = elements.mixer.querySelector(`[data-${volumes ? "volume" : "pan"}-index="${hint.part}"]`);
+      if (!part || !target) return null;
+      const keyboard = hint.input === "keyboard";
+      const gesture = `${keyboard ? "Press Shift+Enter on" : "Press and hold"} ${part.name}’s ${volumes ? "volume" : "pan"}`;
+      const again = keyboard ? "Repeat" : "Hold again";
+      // The cycles in cyclePartVolumeMix and togglePartPanSeparation, in order
+      // and in the words of the messages they show.
+      return { target, message: volumes
+        ? `${gesture} to emphasize ${part.name} (others 20%). ${again} to reduce ${part.name} to 20%; a third time sets all voices to 100%.`
+        : `${gesture} to put ${part.name} right and the other parts left. ${again} to center all parts.` };
+    }
     if (hint.id === "isolate") {
       const selector = hint.row === "see" ? "data-visible-index" : "data-audio-index";
       const target = elements.mixer.querySelector(`[${selector}="${hint.part}"]`);
@@ -471,11 +511,28 @@
     return { target, message: `${gesture} to ${action}.` };
   }
 
-  function queueShortcutTip(hint) {
+  // A tip waits for a drag, audition or scrub to end, for an Undo message to
+  // go, and for the part chooser to be answered, rather than competing with them.
+  const heldPointers = new Set();
+  document.addEventListener("pointerdown", (event) => heldPointers.add(event.pointerId), true);
+  document.addEventListener("pointerup", (event) => heldPointers.delete(event.pointerId), true);
+  document.addEventListener("pointercancel", (event) => heldPointers.delete(event.pointerId), true);
+  window.addEventListener("blur", () => heldPointers.clear());
+
+  function shortcutTipMustWait() {
+    return heldPointers.size > 0 || !elements.partChooser.hidden
+      || (elements.toast.classList.contains("has-action") && elements.toast.classList.contains("is-visible"));
+  }
+
+  function queueShortcutTip(hint, waited = 0) {
     window.clearTimeout(shortcutTipTimer);
     if (!hint || !shortcutHints.eligible(hint.id)) return;
     shortcutTipTimer = window.setTimeout(() => {
       if (settingsHelpEnabled || document.hidden || !elements.shortcutTip.hidden) return;
+      if (shortcutTipMustWait()) {
+        if (waited < 12) queueShortcutTip(hint, waited + 1);
+        return;
+      }
       const content = shortcutTipContent(hint);
       const bounds = content?.target?.getBoundingClientRect();
       if (!bounds?.width || !bounds.height || bounds.top < 0 || bounds.bottom > window.innerHeight
@@ -2702,6 +2759,213 @@
     renderPitchTrace();
   }
 
+  // Arriving with a part, from the first-visit chooser or from a link such as
+  // #part=Alto or #part=S1&div=2, only says who is singing. Unlike the pager
+  // it never retargets a hold preset or touches See, Hear, Vol or Pan, so a
+  // returning singer's saved mix stays exactly as it was. Pitchbar view still
+  // keeps the practice part visible, and the caller says so when that shows it.
+  function choosePracticePart(index, divisi) {
+    if (!Number.isInteger(index) || index < 0 || index >= parts.length) return null;
+    const revealed = scoreView === "bars" && !visibleTracks.has(index);
+    practicePartIndex = index;
+    selectedScorePartIndex = null;
+    if (divisi !== undefined) practiceDivisi[index] = divisi;
+    practicePartPager?.setValue(index);
+    updateMixerAppearance();
+    updateNoteActionLabel();
+    savePreferences();
+    renderPitchTrace();
+    if (scoreView === "bars") scheduleBarRender();
+    return { revealed };
+  }
+
+  function practicePartLabel(index) {
+    const line = practiceDivisi[index] ?? null;
+    const option = practiceDivisiOptions(index).find((candidate) => candidate.value === line);
+    return option && line !== null ? `${parts[index].name} ${option.label}` : parts[index].name;
+  }
+
+  function partChooserAnswered() {
+    try {
+      return Boolean(partChooserKey && localStorage.getItem(partChooserKey));
+    } catch {
+      return false;
+    }
+  }
+
+  function rememberPartChooser(answer) {
+    try {
+      if (partChooserKey) localStorage.setItem(partChooserKey, answer);
+    } catch {
+      // Device-local preferences are optional.
+    }
+  }
+
+  function showPartChooser({ only = null, note = "" } = {}) {
+    if (parts.length < 2) return;
+    const choices = (only || parts.map((part) => part.index)).map((index) => parts[index]);
+    elements.partChooserOptions.replaceChildren(...choices.map((part) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "part-chooser-option";
+      button.dataset.partIndex = String(part.index);
+      button.style.setProperty("--part-color", part.color);
+      button.textContent = part.name;
+      return button;
+    }));
+    elements.partChooserNote.textContent = note || "You can change it later in settings, under Practice.";
+    elements.partChooser.hidden = false;
+  }
+
+  function hidePartChooser() {
+    if (elements.partChooser.hidden) return;
+    const hadFocus = elements.partChooser.contains(document.activeElement);
+    elements.partChooser.hidden = true;
+    if (hadFocus) {
+      const next = elements.settingsPanel.classList.contains("is-open") ? elements.practicePart : elements.settingsToggle;
+      next.focus({ preventScroll: true });
+    }
+  }
+
+  function dismissPartChooser() {
+    rememberPartChooser("dismissed");
+    hidePartChooser();
+  }
+
+  // Later fields win, so the hash overrides a ?part= query. Song names and
+  // other fields are left for whoever owns them.
+  function partLinkFields(...addresses) {
+    const decode = (value) => {
+      try {
+        return decodeURIComponent(value.replace(/\+/gu, " "));
+      } catch {
+        return value;
+      }
+    };
+    const fields = {};
+    addresses.forEach((address) => String(address || "").replace(/^[#?]/u, "").split("&").forEach((token) => {
+      const at = token.indexOf("=");
+      if (at < 1) return;
+      const key = decode(token.slice(0, at)).trim().toLowerCase();
+      if (key === "part" || key === "div") fields[key] = decode(token.slice(at + 1)).trim();
+    }));
+    return fields;
+  }
+
+  const partLinkKey = (value) => String(value ?? "").normalize("NFKD").replace(/\p{M}/gu, "")
+    .toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+  // Exact names, short names and ids first ("Alto 1", "A1"), then a unique
+  // beginning ("sop"). Anything that still fits several parts is offered as a
+  // choice rather than guessed between.
+  function partsForLink(text) {
+    const wanted = partLinkKey(text);
+    if (!wanted) return [];
+    const names = parts.map((part) => [part.name, part.short, part.id].map(partLinkKey).filter(Boolean));
+    const exact = parts.filter((part) => names[part.index].includes(wanted));
+    const matches = exact.length ? exact
+      : parts.filter((part) => names[part.index].some((name) => name.startsWith(wanted)));
+    return matches.map((part) => part.index);
+  }
+
+  function divisiForLink(index, text) {
+    if (text === undefined || text === "") return { value: undefined };
+    const wanted = partLinkKey(text).replace(/^div/u, "");
+    if (wanted === "all") return { value: null };
+    const line = /^\d+$/u.test(wanted) ? Number(wanted) - 1 : NaN;
+    return practiceDivisiOptions(index).some((option) => option.value === line)
+      ? { value: line } : { value: undefined, missing: text };
+  }
+
+  // Returns whether the link said anything about parts at all.
+  function applyPartLink(link) {
+    if (!link || (link.part === undefined && link.div === undefined)) return false;
+    if (!parts.length) {
+      pendingPartLink = link;
+      return true;
+    }
+    if (link.part === undefined && !Number.isInteger(practicePartIndex)) return false;
+    const matches = link.part === undefined ? [practicePartIndex] : partsForLink(link.part);
+    if (matches.length !== 1) {
+      const quoted = `“${link.part}”`;
+      if (matches.length) {
+        showPartChooser({ only: matches, note: `The link’s ${quoted} could be ${matches.length === 2 ? "either" : "any"} of these.` });
+      }
+      else if (!Number.isInteger(practicePartIndex)) showPartChooser({ note: `This song has no part called ${quoted}.` });
+      else showToast(`This song has no part called ${quoted}; still practising ${practicePartLabel(practicePartIndex)}`);
+      return true;
+    }
+    const index = matches[0];
+    const divisi = divisiForLink(index, link.div);
+    const before = { part: practicePartIndex, divisi: [...practiceDivisi], visible: [...visibleTracks] };
+    const { revealed } = choosePracticePart(index, divisi.value);
+    rememberPartChooser("chosen");
+    hidePartChooser();
+    const changed = before.part !== index || before.divisi[index] !== practiceDivisi[index];
+    const undo = changed && Number.isInteger(before.part) ? () => {
+      practiceDivisi = before.divisi;
+      visibleTracks.clear();
+      before.visible.forEach((part) => visibleTracks.add(part));
+      choosePracticePart(before.part);
+      showToast(`Practising ${practicePartLabel(before.part)}`);
+    } : null;
+    const label = practicePartLabel(index);
+    const message = divisi.missing ? `${parts[index].name} has no Div ${divisi.missing}; practising ${label}`
+      : `Practising ${label}${Number.isInteger(before.part) && changed ? " from the link" : ""}`;
+    showToast(`${message}${revealed ? " (shown in pitchbar view)" : ""}`, "", undo);
+    return true;
+  }
+
+  // A link is followed once. Afterwards the remembered choice speaks for
+  // itself, so a reload or bookmark cannot undo a later change of part.
+  function consumePartLink() {
+    try {
+      const address = new URL(window.location.href);
+      const keep = (text) => text.replace(/^[#?]/u, "").split("&")
+        .filter((token) => token && !/^(part|div)=/iu.test(token)).join("&");
+      address.search = keep(address.search);
+      address.hash = keep(address.hash);
+      window.history.replaceState(window.history.state, "", address.href);
+    } catch {
+      // An opaque or read-only address keeps its link; nothing depends on it.
+    }
+  }
+
+  elements.partChooserOptions.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-part-index]");
+    if (!button) return;
+    const index = Number(button.dataset.partIndex);
+    const chosen = choosePracticePart(index);
+    if (!chosen) return;
+    rememberPartChooser("chosen");
+    hidePartChooser();
+    showToast(`Practising ${practicePartLabel(index)}${chosen.revealed ? " (shown in pitchbar view)" : ""}`);
+    // Choosing is the natural moment to learn that holding the part's number
+    // brings it forward. The tip waits for the mixer to be on screen.
+    queueShortcutTip(shortcutHints.hold("vol", index, event.detail === 0 ? "keyboard" : "touch"));
+  });
+  elements.partChooserDismiss.addEventListener("click", dismissPartChooser);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.partChooser.hidden || event.defaultPrevented) return;
+    if (isTextEntryTarget(event.target) && !elements.partChooser.contains(event.target)) return;
+    // Settings stay open; a second Escape reaches them.
+    event.preventDefault();
+    dismissPartChooser();
+  });
+  // A collection owns its own address and forwards the part fields it found
+  // there, so the parts of this song decide what the name means.
+  document.addEventListener("melete:deep-link", (event) => {
+    const detail = event.detail || {};
+    const field = (value) => typeof value === "string" ? value : undefined;
+    applyPartLink({ part: field(detail.part), div: field(detail.div) });
+  });
+  window.addEventListener("hashchange", () => {
+    const link = partLinkFields(window.location.hash);
+    if (link.part === undefined && link.div === undefined) return;
+    consumePartLink();
+    applyPartLink(link);
+  });
+
   function ensurePracticePartVisible() {
     if (scoreView === "bars" && Number.isInteger(practicePartIndex)
       && practicePartIndex >= 0 && practicePartIndex < parts.length) visibleTracks.add(practicePartIndex);
@@ -2987,9 +3251,13 @@
         format: (value) => `${value}%`,
         aria: (value) => `${part.name} volume ${value} percent`,
         pixelsPerStep: 4,
-        onHold: () => cyclePartVolumeMix(index),
+        onHold: () => {
+          learnShortcut("vol-hold");
+          cyclePartVolumeMix(index);
+        },
         onManualChange: (before, after, input) => queueShortcutTip(shortcutHints.adjust(
-          "vol", index, before, after, preferenceDefaults().volumes[index], input)),
+          "vol", index, before, after, preferenceDefaults().volumes[index], input)
+          || shortcutHints.hold("vol", index, input)),
       });
       button.addEventListener("input", () => {
         cancelPracticeMixSession();
@@ -3033,9 +3301,13 @@
       elements.mixer.append(button);
       const control = createPanRing(button, {
         name: part.name, defaultValue: () => preferenceDefaults().pans[index],
-        onHold: () => togglePartPanSeparation(index),
+        onHold: () => {
+          learnShortcut("pan-hold");
+          togglePartPanSeparation(index);
+        },
         onManualChange: (before, after, input) => queueShortcutTip(shortcutHints.adjust(
-          "pan", index, before, after, preferenceDefaults().pans[index], input)),
+          "pan", index, before, after, preferenceDefaults().pans[index], input)
+          || shortcutHints.hold("pan", index, input)),
       });
       button.addEventListener("input", () => {
         trackPans[index] = control.value();
@@ -4235,6 +4507,45 @@
     // Collection restoration is an exact location, not a chapter-scrubbing gesture.
     api.tickPosition = seekTickFor(milliseconds);
     return true;
+  }
+
+  // The timeline's section names were only ever hover titles, which a touch
+  // screen never shows. While a finger scrubs, the section under the thumb
+  // sits on the rail, where sliding the finger down reveals it, and goes on
+  // release. Nothing is added to the header between gestures.
+  let scrubLabelPointer = null;
+
+  function chapterLabelAt(milliseconds) {
+    let label = "";
+    // A song without sections has only its "Start", which says nothing.
+    if (elements.timelineSegments.children.length < 2) return label;
+    for (const segment of elements.timelineSegments.children) {
+      if (Number(segment.dataset.chapterMilliseconds) > milliseconds + 1) break;
+      label = segment.title;
+    }
+    return label;
+  }
+
+  function showScrubLabel(milliseconds) {
+    const label = chapterLabelAt(milliseconds);
+    if (!label) {
+      elements.scrubLabel.hidden = true;
+      return;
+    }
+    elements.scrubLabel.textContent = label;
+    elements.scrubLabel.hidden = false;
+    const rail = elements.timelineRail.getBoundingClientRect();
+    const thumb = parseFloat(getComputedStyle(elements.timelineRail).getPropertyValue("--seek-thumb-size")) || 16;
+    const fraction = clamp(milliseconds / (Number(elements.seek.max) || 1), 0, 1);
+    const x = rail.left + thumb / 2 + (rail.width - thumb) * fraction;
+    const box = elements.scrubLabel.getBoundingClientRect();
+    elements.scrubLabel.style.left = `${clamp(x - box.width / 2, 8, Math.max(8, window.innerWidth - box.width - 8))}px`;
+    elements.scrubLabel.style.top = `${rail.top + rail.height / 2 - box.height / 2}px`;
+  }
+
+  function hideScrubLabel() {
+    scrubLabelPointer = null;
+    elements.scrubLabel.hidden = true;
   }
 
   function previewSeek(milliseconds, updateScore = false) {
@@ -7221,6 +7532,11 @@
     setPracticePart(practicePartPager?.value());
     updateNoteActionLabel();
     if (scoreView === "bars") scheduleBarRender();
+    // Choosing here answers the first-visit question as well.
+    if (Number.isInteger(practicePartIndex) && !elements.partChooser.hidden) {
+      rememberPartChooser("chosen");
+      hidePartChooser();
+    }
   });
   elements.flowToggle.addEventListener("click", () => setFlow(flow === "wrap" ? "continuous" : "wrap"));
   elements.flowToggle.addEventListener("keydown", (event) => {
@@ -7258,17 +7574,27 @@
   elements.playPause.addEventListener("click", () => engine?.toggleTransport());
   document.addEventListener("melete:restore-position", event => restorePlaybackPosition(event.detail?.milliseconds));
   document.addEventListener("melete:activate", () => { if (ready) initializeMediaSession(); });
-  elements.seek.addEventListener("pointerdown", () => { seeking = true; });
+  elements.seek.addEventListener("pointerdown", (event) => {
+    seeking = true;
+    scrubLabelPointer = event.pointerType === "mouse" ? null : event.pointerId;
+  });
   elements.seek.addEventListener("input", () => {
-    previewSeek(Number(elements.seek.value), true);
+    const value = previewSeek(Number(elements.seek.value), true);
+    if (scrubLabelPointer !== null) showScrubLabel(value);
   });
   elements.seek.addEventListener("change", () => {
+    hideScrubLabel();
     if (!ready || !engine) return;
     seeking = false;
     const value = previewSeek(Number(elements.seek.value));
     api.tickPosition = seekTickFor(value);
   });
-  elements.seek.addEventListener("pointercancel", () => { seeking = false; });
+  elements.seek.addEventListener("pointercancel", () => { seeking = false; hideScrubLabel(); });
+  // A release can land anywhere once the finger has slid off the rail.
+  ["pointerup", "pointercancel"].forEach((type) => document.addEventListener(type, (event) => {
+    if (event.pointerId === scrubLabelPointer) hideScrubLabel();
+  }, true));
+  window.addEventListener("blur", hideScrubLabel);
   elements.seek.addEventListener("keydown", (event) => {
     if (!ready || !engine || !api) return;
     let value = null;
@@ -7602,6 +7928,7 @@
       annotationKey = songKey("notes");
       legacyAnnotationKeys = [`${songKey("notes")}:v3`, `${songKey("notes")}:v2`,
         `choir-practice:${buildMetadata.fingerprint}:v2:notes`];
+      partChooserKey = songKey("part-chooser");
       setSettingsOpen(loadSettingsOpenState(), { persist: false });
       loadPreferences();
       loadPitchTrace();
@@ -7614,6 +7941,13 @@
       updateLoopState();
       updateNoteActionLabel();
       updatePitchCaptureAppearance();
+      // A link naming a part wins; otherwise a first visit with no part asks.
+      const ownPartLink = partLinkFields(window.location.search, window.location.hash);
+      const ownLinkNamesPart = ownPartLink.part !== undefined || ownPartLink.div !== undefined;
+      if (ownLinkNamesPart) consumePartLink();
+      const arrivalLink = pendingPartLink || (ownLinkNamesPart ? ownPartLink : null);
+      pendingPartLink = null;
+      if (!applyPartLink(arrivalLink) && !Number.isInteger(practicePartIndex) && !partChooserAnswered()) showPartChooser();
 
       const settings = new window.alphaTab.Settings();
       settings.core.file = null;

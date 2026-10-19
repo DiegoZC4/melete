@@ -254,6 +254,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"></path></svg>
       </button>
     </aside>
+    <aside class="part-chooser" id="partChooser" role="dialog" aria-modal="false" aria-labelledby="partChooserTitle" aria-describedby="partChooserNote" hidden>
+      <div class="part-chooser-head">
+        <span class="part-chooser-title" id="partChooserTitle">Which part do you sing?</span>
+        <button class="icon-button" id="partChooserDismiss" type="button" aria-label="Not now" title="Not now">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <div class="part-chooser-options" id="partChooserOptions" role="group" aria-labelledby="partChooserTitle"></div>
+      <p class="part-chooser-note" id="partChooserNote"></p>
+    </aside>
+    <div class="scrub-label" id="scrubLabel" aria-hidden="true" hidden></div>
     <script src="./app.js" data-inline></script>
     <!-- THIRD_PARTY_NOTICES -->
   </body>

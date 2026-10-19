@@ -1519,6 +1519,70 @@ svg.is-auditioning-score { cursor: grabbing; }
 .shortcut-tip .icon-button:hover { background: rgba(255, 255, 255, 0.14); }
 .is-shortcut-tip-target { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 
+/* First-visit part chooser: a small card over the bottom of the score, never
+   a modal. Below the toast so an Undo stays reachable. */
+.part-chooser {
+  width: min(380px, calc(100vw - 24px));
+  position: fixed;
+  z-index: 780;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  padding: 9px 10px 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 0.78rem;
+  transform: translateX(-50%);
+}
+.part-chooser[hidden] { display: none; }
+.part-chooser-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.part-chooser-title { font-size: 0.88rem; font-weight: 720; }
+.part-chooser .icon-button { flex: 0 0 auto; width: 30px; height: 30px; border: 0; background: transparent; }
+.part-chooser-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+.part-chooser-option {
+  min-width: 0;
+  min-height: 40px;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--part-color) 52%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--part-color) 9%, var(--field));
+  color: var(--part-color);
+  cursor: pointer;
+  font-weight: 720;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.part-chooser-option:hover { background: color-mix(in srgb, var(--part-color) 18%, var(--field)); }
+.part-chooser-note { margin: 7px 0 0; color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
+
+/* The section under a touch scrub, shown only while the finger is down. */
+.scrub-label {
+  max-width: min(260px, calc(100vw - 16px));
+  position: fixed;
+  z-index: 520;
+  top: 0;
+  left: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(26, 31, 28, 0.94);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  font-size: 0.74rem;
+  font-weight: 680;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scrub-label[hidden] { display: none; }
+
 .at-cursor-bar {
   z-index: 5 !important;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -1722,6 +1786,19 @@ textarea:focus-visible {
   .loading-card { top: 58px; }
 }
 
+/* A fingertip needs taller mixer rows than a pointer does. Only the mixer
+   grows, so a narrow desktop window and the other groups stay compact. */
+@media (hover: none) and (pointer: coarse) {
+  .mixer { --toolbar-row-height: 36px; }
+  .part-heading { font-size: 0.72rem; }
+  .mixer-row-label { font-size: 0.7rem; }
+  .mixer .drag-number { font-size: 0.7rem; }
+  .matrix-cell::after { width: 11px; height: 11px; }
+  .pan-arc { width: 25px; height: 25px; }
+  .pan-cap::after { top: 11px; left: 11px; }
+  .pan-indicator { height: 9px; }
+}
+
 @media (max-width: 430px) {
   .transport-primary { gap: 7px; }
   .play-button { width: 30px; height: 30px; }
@@ -1745,6 +1822,8 @@ textarea:focus-visible {
   .loading-card,
   .toast,
   .settings-tooltip,
+  .part-chooser,
+  .scrub-label,
   .skip-link { display: none !important; }
   body { background: white; color: black; }
   .at-surface-svg { filter: none; }

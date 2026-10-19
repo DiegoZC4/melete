@@ -9,6 +9,7 @@ const {chromium} = require(process.env.GUI_QA_NODE_MODULES
 const {checkMeasureRests} = require('./browser-rest-layout.cjs');
 const {checkCursorEdges} = require('./browser-cursor-layout.cjs');
 const {checkPanHolds} = require('./browser-pan-hold.cjs');
+const {checkFirstVisit, checkTouchVolumeTip, checkPartLinks, checkTouchRows, checkScrubLabel} = require('./browser-onboarding.cjs');
 
 async function main() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'melete-shared-smoke-'));
@@ -40,7 +41,8 @@ async function main() {
         isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, colorScheme: 'dark'});
       try {
         await context.route('**/*', route => {
-          if (route.request().url() === origin) return route.fulfill({contentType: 'text/html', body: html});
+          // A ?part= link asks for the same document.
+          if (route.request().url().split('?')[0] === origin) return route.fulfill({contentType: 'text/html', body: html});
           requests.push(route.request().url()); return route.abort();
         });
         const page = await context.newPage();
@@ -51,7 +53,10 @@ async function main() {
         await settled();
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), mobile ? '70' : '100');
         assert.equal(await page.locator('#annotationLayout').getAttribute('aria-pressed'), String(mobile));
+        const names = ['Soprano', 'Alto', 'Bass'];
+        const firstVisit = await checkFirstVisit(page, page, {mobile, names});
         if (mobile) await page.locator('#settingsToggle').click();
+        const touchTip = mobile ? await checkTouchVolumeTip(page, page, 'Soprano') : null;
 
         // All nonempty visibility subsets: global directions survive, local ones do not migrate.
         for (const selected of [[0,1,2],[1,2],[0,2],[0,1],[2],[1],[0]]) {
@@ -150,6 +155,8 @@ async function main() {
           `pan separation is saved (${mobile ? 'mobile' : 'desktop'}): ${JSON.stringify(storedMixes)}`);
         await page.reload(); await settled();
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), saved);
+        assert.equal(await page.locator('#partChooser').isVisible(), false, 'an answered chooser is not asked again');
+        assert.equal(await page.locator('#practicePart').getAttribute('data-value'), '1');
         assert.deepEqual(await page.locator('[data-pan-index]').evaluateAll(nodes => nodes.map(node => Number(node.dataset.value))),
           [-100, 100, -100], 'pan separation survives reload');
         if (mobile && await page.locator('#settingsToggle').getAttribute('aria-expanded') !== 'true')
@@ -160,8 +167,12 @@ async function main() {
         if (mobile && await page.locator('#settingsToggle').getAttribute('aria-expanded') === 'true')
           await page.locator('#settingsToggle').click();
         await page.screenshot({path: path.join(output, `shared-${mobile ? 'mobile' : 'desktop'}.png`)});
+        const scrubLabel = await checkScrubLabel(page, page, {mobile});
+        const touchRows = await checkTouchRows(page, page, {mobile});
+        const partLinks = await checkPartLinks(page, origin, settled, {names});
         results.push({viewport: mobile ? 'mobile' : 'desktop', visibilitySubsets: 7, onsetChecks: 4, savedScale: saved,
-          fullMeasureRests: {scales:[5,200], count:restLayout.length}, cursorEdges, panHolds});
+          fullMeasureRests: {scales:[5,200], count:restLayout.length}, cursorEdges, panHolds,
+          firstVisit, touchTip, scrubLabel, touchRows, partLinks});
       } finally { await context.close(); }
     }
     assert.deepEqual(errors, []);

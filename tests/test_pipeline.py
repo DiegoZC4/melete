@@ -773,7 +773,10 @@ console.log(JSON.stringify({
         self.assertNotIn('id="mixLearn"', document)
         self.assertNotIn('id="mixCheck"', document)
         self.assertNotIn("renderPracticeMixIcon", app)
-        self.assertIn("onHold: () => cyclePartVolumeMix(index)", app)
+        # A hold both cycles the mix and records that the gesture is known,
+        # so its once-only tip never appears after the singer has used it.
+        self.assertIn('onHold: () => {\n          learnShortcut("vol-hold");\n          cyclePartVolumeMix(index);', app)
+        self.assertIn('onHold: () => {\n          learnShortcut("pan-hold");\n          togglePartPanSeparation(index);', app)
         self.assertIn('button.dataset.volumeIndex = String(index)', app)
         self.assertIn('button.setAttribute("aria-keyshortcuts", "Shift+Enter")', app)
         self.assertIn("practiceMixPart: practiceMixPartIndex", app)
@@ -938,6 +941,28 @@ console.log(JSON.stringify(out));
         sing = styles.split(".sing-control.icon-button {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-row: 2 / 4", sing)
         self.assertIn("grid-column: 3", sing)
+
+    def test_touch_mixer_rows_grow_only_for_coarse_pointers(self) -> None:
+        styles = (ROOT / "template" / "styles.css").read_text(encoding="utf-8")
+        touch = styles.split("@media (hover: none) and (pointer: coarse) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn(".mixer { --toolbar-row-height: 36px; }", touch)
+        # Only the mixer grows; the four-row groups keep the shared rhythm and a
+        # narrow desktop window keeps the compact rows.
+        self.assertNotIn(".settings-strip", touch)
+        narrow = styles.split("@media (max-width: 760px), (hover: none) and (pointer: coarse) {", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("--toolbar-row-height:", narrow)
+
+    def test_first_visit_and_scrub_overlays_start_hidden(self) -> None:
+        document = (ROOT / "template" / "index.html").read_text(encoding="utf-8")
+        styles = (ROOT / "template" / "styles.css").read_text(encoding="utf-8")
+        chooser = document.split('<aside class="part-chooser"', 1)[1].split(">", 1)[0]
+        # Script decides whether to ask, so nothing flashes for a returning singer.
+        self.assertIn('role="dialog" aria-modal="false"', chooser)
+        self.assertTrue(chooser.rstrip().endswith("hidden"))
+        self.assertIn('<div class="scrub-label" id="scrubLabel" aria-hidden="true" hidden></div>', document)
+        printed = styles.split("@media print {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn(".part-chooser,", printed)
+        self.assertIn(".scrub-label,", printed)
 
     def test_percentage_controls_have_one_fixed_width(self) -> None:
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")
@@ -1750,7 +1775,7 @@ console.log(JSON.stringify({{
         current = re.findall(r'^\s*(\w+Key) = songKey\("([^"]+)"\);', block, re.M)
         self.assertEqual(
             sorted(current),
-            [("annotationKey", "notes"), ("pitchTraceKey", "pitch-trace"),
+            [("annotationKey", "notes"), ("partChooserKey", "part-chooser"), ("pitchTraceKey", "pitch-trace"),
              ("preferenceKey", "preferences"), ("settingsPanelPreferenceKey", "settings-open")],
         )
         # A version in the key name is what stranded everyone's data before: the
