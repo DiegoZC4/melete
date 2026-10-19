@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<score-partwise version="4.0">
+  <work><work-title>Shared regression score</work-title></work>
+  <part-list>
+    <score-part id="S"><part-name>Soprano</part-name><part-abbreviation>S</part-abbreviation><score-instrument id="SI"><instrument-name>Voice</instrument-name></score-instrument><midi-instrument id="SI"><midi-channel>1</midi-channel><midi-program>53</midi-program></midi-instrument></score-part>
+    <score-part id="A"><part-name>Alto</part-name><part-abbreviation>A</part-abbreviation><score-instrument id="AI"><instrument-name>Voice</instrument-name></score-instrument><midi-instrument id="AI"><midi-channel>2</midi-channel><midi-program>53</midi-program></midi-instrument></score-part>
+    <score-part id="B"><part-name>Bass</part-name><part-abbreviation>B</part-abbreviation><score-instrument id="BI"><instrument-name>Voice</instrument-name></score-instrument><midi-instrument id="BI"><midi-channel>3</midi-channel><midi-program>53</midi-program></midi-instrument></score-part>
+  </part-list>
+  <part id="S">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction placement="above" system="only-top"><direction-type><rehearsal>Intro</rehearsal></direction-type></direction>
+      <direction placement="above" system="only-top"><direction-type><words>Lightly</words></direction-type></direction>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>126.000126000126</per-minute></metronome></direction-type><sound tempo="126.000126000126"/></direction>
+      <harmony><root><root-step>C</root-step></root><kind>major</kind></harmony>
+      <direction placement="below"><direction-type><dynamics><mf/></dynamics></direction-type></direction>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>2</duration><type>eighth</type><notations><slur type="start" number="1"/></notations><lyric><text>oh</text></lyric></note>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>2</duration><type>eighth</type><notations><slur type="stop" number="1"/></notations></note>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><lyric><syllabic>begin</syllabic><text>to</text></lyric></note>
+      <note><pitch><step>F</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><lyric><syllabic>end</syllabic><text>gether</text></lyric></note>
+      <note><rest/><duration>4</duration><type>quarter</type></note>
+    </measure>
+    <measure number="2">
+      <direction placement="above" system="only-top"><direction-type><rehearsal>Verse</rehearsal></direction-type></direction>
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>83.99998320000336</per-minute></metronome></direction-type><sound tempo="83.99998320000336"/></direction>
+      <harmony><root><root-step>F</root-step></root><kind>major</kind></harmony>
+      <note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><lyric><text>sing</text></lyric></note>
+      <direction placement="above" system="only-top"><direction-type><words>rit.</words></direction-type></direction>
+      <note><pitch><step>D</step><octave>5</octave></pitch><duration>4</duration><type>quarter</type><lyric><text>with</text></lyric></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>8</duration><type>half</type><lyric><text>me</text></lyric></note>
+    </measure>
+    <measure number="3">
+      <direction placement="above" system="only-top"><direction-type><rehearsal>Chorus</rehearsal></direction-type></direction>
+      <direction placement="above" system="only-top"><direction-type><words>a tempo</words></direction-type></direction>
+      <direction><direction-type><metronome><beat-unit>eighth</beat-unit><beat-unit>eighth</beat-unit></metronome></direction-type><sound tempo="84"/></direction>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration><type>whole</type><lyric><text>oh</text></lyric></note>
+    </measure>
+    <measure number="4">
+      <attributes><key><fifths>-1</fifths></key><time><beats>7</beats><beat-type>4</beat-type></time></attributes>
+      <note><rest measure="yes"/><duration>28</duration></note>
+    </measure>
+  </part>
+  <part id="A">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>
+      <direction placement="above"><direction-type><words>breathe</words></direction-type></direction>
+      <note><pitch><step>G</step><octave>4</octave></pitch><duration>16</duration><type>whole</type><lyric><text>oh</text></lyric></note>
+    </measure>
+    <measure number="2"><note><pitch><step>A</step><octave>4</octave></pitch><duration>16</duration><type>whole</type><lyric><text>oh</text></lyric></note></measure>
+    <measure number="3"><note><pitch><step>G</step><octave>4</octave></pitch><duration>16</duration><type>whole</type><lyric><text>oh</text></lyric></note></measure>
+    <measure number="4">
+      <attributes><key><fifths>-1</fifths></key><time><beats>7</beats><beat-type>4</beat-type></time></attributes>
+      <note><rest measure="yes"/><duration>28</duration></note>
+    </measure>
+  </part>
+  <part id="B">
+    <measure number="1">
+      <attributes><divisions>4</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>F</sign><line>4</line></clef></attributes>
+      <direction placement="above" system="also-top"><direction-type><words>Listen</words></direction-type></direction>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><type>whole</type><lyric><text>mm</text></lyric></note>
+    </measure>
+    <measure number="2"><note><pitch><step>F</step><octave>3</octave></pitch><duration>16</duration><type>whole</type><lyric><text>mm</text></lyric></note></measure>
+    <measure number="3"><note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration><type>whole</type><lyric><text>mm</text></lyric></note></measure>
+    <measure number="4">
+      <attributes><key><fifths>-1</fifths></key><time><beats>7</beats><beat-type>4</beat-type></time></attributes>
+      <note><rest measure="yes"/><duration>28</duration></note>
+    </measure>
+  </part>
+</score-partwise>

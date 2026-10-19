@@ -1,0 +1,33 @@
+# This working folder also holds private song builds and local deployment tools.
+# Publish only the reusable pipeline; newly added top-level paths need review.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/THIRD_PARTY_NOTICES.md
+!/CONTRIBUTING.md
+!/build_trainer.py
+!/extract_score.mjs
+!/package.json
+!/package-lock.json
+!/template/
+!/vendor/
+!/tests/
+!/docs/
+!/.github/
+
+__pycache__/
+*.py[cod]
+node_modules/
+.DS_Store
+.env
+.env.*
+*.mscz
+*.mscx
+*.pdf
+*.mp3
+*.wav
+*.flac
+*-practice-web/
+tests/test_local_*.py

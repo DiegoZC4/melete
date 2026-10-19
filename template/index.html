@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4efe7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171b19" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="{{DESCRIPTION}}" />
+    <meta name="application-name" content="Melete" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>{{TITLE}} | Melete</title>
+    <link rel="icon" type="image/svg+xml" href="{{FAVICON_DATA_URI}}" />
+    <link rel="stylesheet" href="./styles.css" data-inline />
+    <script>
+      /* Theme. Runs before first paint so a stored choice never flashes the other
+         palette. With no choice stored the document carries no data-theme and the
+         stylesheet's prefers-color-scheme block decides, so this still degrades to
+         the system setting with JavaScript off. */
+      (function () {
+        var KEY = "choir-practice-theme";
+        var COLOR = { light: "#f4efe7", dark: "#171b19" };
+        var root = document.documentElement;
+        function stored() {
+          try { var v = localStorage.getItem(KEY); return v === "light" || v === "dark" ? v : null; }
+          catch (e) { return null; }
+        }
+        function systemDark() {
+          return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        }
+        function resolved() { return root.dataset.theme || (systemDark() ? "dark" : "light"); }
+        function paint(choice) {
+          if (choice) root.dataset.theme = choice; else delete root.dataset.theme;
+          /* Both theme-color metas are media-scoped. Setting them to the same value
+             makes whichever one matches report the palette actually on screen. */
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i++) {
+            var m = metas[i];
+            if (!m.dataset.systemContent) m.dataset.systemContent = m.getAttribute("content") || "";
+            m.setAttribute("content", choice ? COLOR[choice] : m.dataset.systemContent);
+          }
+        }
+        paint(stored());
+        function label(button) {
+          var next = resolved() === "dark" ? "light" : "dark";
+          var text = "Switch to " + next + " theme";
+          button.setAttribute("aria-label", text);
+          button.title = text;
+          button.dataset.nextTheme = next;
+        }
+        function wire() {
+          var button = document.getElementById("themeToggle");
+          if (!button) return;
+          label(button);
+          button.addEventListener("click", function () {
+            var next = resolved() === "dark" ? "light" : "dark";
+            paint(next);
+            try { localStorage.setItem(KEY, next); } catch (e) {}
+            label(button);
+          });
+          if (window.matchMedia) {
+            var query = window.matchMedia("(prefers-color-scheme: dark)");
+            var onChange = function () { if (!stored()) { paint(null); label(button); } };
+            if (query.addEventListener) query.addEventListener("change", onChange);
+            else if (query.addListener) query.addListener(onChange);
+          }
+        }
+        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
+        else wire();
+      })();
+    </script>
+    <script src="./vendor/alphatab/alphaTab.min.js" data-inline></script>
+    <script src="./vendor/pitchy/pitchy-browser.js" data-inline></script>
+    <script>
+      window.TRAINER_FONT_SOURCE = "./vendor/alphatab/font/Bravura.woff2";
+    </script>
+    <script id="score-data" type="application/vnd.recordare.musicxml+xml"></script>
+    <script id="playback-data" type="application/json"></script>
+    <script id="trainer-config" type="application/json"></script>
+    <script id="build-metadata" type="application/json"></script>
+    <script id="portable-state" type="application/json"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#score">Skip to score</a>
+
+    <header class="transport" aria-label="Practice controls">
+      <div class="transport-primary">
+        <button
+          class="play-button"
+          id="playPause"
+          type="button"
+          aria-label="Play score"
+          aria-keyshortcuts="Space"
+          title="Play (Space)"
+          disabled
+        >
+          <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 4 13 8-13 8Z"></path></svg>
+          <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5v14M16 5v14"></path></svg>
+        </button>
+
+        <div class="timeline" aria-label="Playback timeline">
+          <div class="timeline-rail" id="timelineRail">
+            <div class="timeline-track" aria-hidden="true">
+              <div class="timeline-segments" id="timelineSegments"></div>
+              <div class="loop-band" id="loopBand"></div>
+            </div>
+            <label class="visually-hidden" for="seek">Playback position</label>
+            <input id="seek" type="range" min="0" max="1" step="1" value="0" disabled />
+          </div>
+        </div>
+
+        <output class="time-readout" id="timeReadout" aria-label="Elapsed and total time">
+          <span id="currentTime">0:00</span><span aria-hidden="true">/</span><span id="totalTime">0:00</span>
+        </output>
+
+        <button
+          class="icon-button settings-toggle"
+          id="settingsToggle"
+          type="button"
+          aria-label="Open settings"
+          aria-controls="settingsPanel"
+          aria-expanded="false"
+          title="Settings"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        </button>
+      </div>
+
+      <div class="settings-panel" id="settingsPanel" aria-hidden="true">
+        <div class="settings-strip">
+          <section class="control-group parts-group" aria-labelledby="partsLabel">
+            <span class="group-label" id="partsLabel">Parts</span>
+            <div class="mixer-scroll"><div class="mixer" id="mixer" aria-busy="true">Preparing parts…</div></div>
+          </section>
+
+          <section class="control-group practice-group" aria-labelledby="practiceLabel">
+            <span class="group-label" id="practiceLabel">Practice</span>
+            <div class="practice-mix" aria-label="Practice part">
+              <div class="part-picker"><div class="practice-part-pager" id="practicePart" role="spinbutton" tabindex="0" aria-label="Your practice part" data-help="Tap to advance; drag to browse."></div></div>
+            </div>
+            <div class="control-stack tempo-column" role="group" aria-label="Tempo controls">
+              <label class="number-control practice-speed"><span>Speed</span><button class="drag-number" id="tempo" type="button" data-value="100" data-help="Drag vertically to change speed.">100%</button></label>
+              <label class="number-control practice-metronome-volume">
+              <!-- User-selected metronome silhouette; inlined for offline use. -->
+              <span class="metronome-label" aria-label="Metronome volume" title="Metronome volume">
+                <svg viewBox="0 0 314 314" focusable="false"><path d="M281.853,46.631c-0.39-2.035-1.66-3.794-3.47-4.802l-11.257-6.271l5.297-9.511c1.881-3.378,0.668-7.641-2.709-9.521c-3.38-1.881-7.641-0.667-9.521,2.709l-5.297,9.511l-11.257-6.269c-1.81-1.008-3.975-1.162-5.908-0.422c-1.936,0.74-3.442,2.3-4.117,4.259l-13.806,40.109c-1.103,3.207,0.25,6.743,3.213,8.394l4.741,2.642l-23.115,41.501L184.592,17.11C182.703,7.516,173.563,0,163.783,0h-56.052c-9.778,0-18.918,7.516-20.809,17.11L46.102,224.425c-0.002,0.012-0.004,0.023-0.006,0.035l-13.729,69.725c-0.998,5.067,0.205,10.132,3.3,13.895C38.76,311.842,43.496,314,48.66,314h174.195c5.163,0,9.898-2.158,12.993-5.92c3.095-3.763,4.298-8.827,3.301-13.896l-13.732-69.741c-0.001-0.002-0.001-0.004-0.001-0.004l-16.584-84.225l31.16-55.944l4.742,2.642c1.072,0.598,2.243,0.885,3.402,0.885c2.046,0,4.056-0.896,5.425-2.571l26.836-32.853C281.708,50.769,282.241,48.665,281.853,46.631z M100.659,19.816c0.6-3.044,3.971-5.816,7.072-5.816h56.052c3.103,0,6.473,2.771,7.072,5.815l23.249,118.069L164,191.933c-6.17-2.645-13.121-4.627-21.242-5.363v-14.92h10.96c3.866,0,7-3.134,7-7s-3.134-7-7-7h-10.96v-41.211h10.96c3.866,0,7-3.134,7-7c0-3.866-3.134-7-7-7h-10.96v-41.21h10.96c3.866,0,7-3.134,7-7s-3.134-7-7-7h-10.96V34.938c0-3.866-3.134-7-7-7c-3.866,0-7,3.134-7,7v12.291h-10.96c-3.866,0-7,3.134-7,7s3.134,7,7,7h10.96v41.21h-10.96c-3.866,0-7,3.134-7,7c0,3.866,3.134,7,7,7h10.96v41.211h-10.96c-3.866,0-7,3.134-7,7s3.134,7,7,7h10.96v14.92c-19.447,1.763-32.189,10.688-43.564,18.666c-7.894,5.536-14.975,10.493-23.52,12.573L100.659,19.816z M225.036,299.188c-0.432,0.523-1.206,0.813-2.181,0.813H48.66c-0.976,0-1.75-0.289-2.181-0.814c-0.432-0.524-0.565-1.34-0.377-2.297l12.675-64.372c14.147-1.593,24.455-8.807,34.455-15.82c12.059-8.457,23.448-16.444,42.525-16.444c19.077,0,30.466,7.987,42.524,16.444c10.001,7.014,20.308,14.228,34.456,15.82l12.675,64.371C225.602,297.846,225.468,298.662,225.036,299.188z M209.842,217.809c-8.545-2.08-15.627-7.037-23.521-12.574c-3.175-2.227-6.456-4.527-9.959-6.726l21.928-39.367L209.842,217.809z M246.427,71.829l-11.474-6.392l9.177-26.662l20.136,11.216L246.427,71.829z"></path></svg>
+                Vol
+              </span>
+              <button class="drag-number" id="metronome" type="button" data-value="0" aria-label="Metronome volume" data-help="Drag vertically to set metronome volume.">0%</button></label>
+            </div>
+            <button class="icon-button binary-icon-button sing-control" id="pitchCapture" type="button" aria-pressed="false" aria-label="Turn on microphone pitch tracking" data-help="Tap: trace pitch. Hold: clear trace." disabled>
+              <!-- Lucide Microphone, ISC license: https://lucide.dev/icons/mic -->
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>
+              <span>Sing</span>
+            </button>
+            <div class="loop-setting" id="loopControls" role="group" aria-label="Measure loop">
+              <span id="loopLabel">Loop</span>
+              <div class="loop-pill">
+                <button class="loop-point" id="loopStart" type="button" aria-label="Set loop start to selected measure" aria-keyshortcuts="[" data-help="Set start here; hold to clear loop. Shortcut: [">Start</button>
+                <button class="loop-point" id="loopEnd" type="button" aria-label="Set loop end to selected measure" aria-keyshortcuts="]" data-help="Set end here; hold to clear loop. Shortcut: ]">End</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-group display-group" aria-labelledby="displayLabel">
+            <span class="group-label" id="displayLabel">Display</span>
+            <div class="control-stack display-controls" role="group" aria-label="Score display">
+              <div class="pill-toggle score-view-toggle" id="scoreViewToggle" role="tablist" aria-label="Score view" data-help="Switch between sheet music and relative-pitch bars.">
+                <span class="pill-thumb" aria-hidden="true"></span>
+                <button class="pill-option is-active" type="button" data-view="standard" role="tab" aria-selected="true">Score</button>
+                <button class="pill-option" type="button" data-view="bars" role="tab" aria-selected="false" tabindex="-1">Pitchbar</button>
+              </div>
+              <div class="display-control-row display-direction-row">
+                <span>Scroll</span>
+                <div class="pill-toggle" id="flowToggle" role="tablist" aria-label="Score scroll direction" data-help="Choose vertical or horizontal scrolling.">
+                  <span class="pill-thumb" aria-hidden="true"></span>
+                  <!-- Lucide move-vertical / move-horizontal, ISC license: https://lucide.dev/ -->
+                  <button class="pill-option is-active" type="button" data-flow="wrap" role="tab" aria-selected="true" aria-label="Vertical scrolling" data-help="Scroll vertically.">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2v20"></path><path d="m8 18 4 4 4-4"></path><path d="m8 6 4-4 4 4"></path></svg>
+                  </button>
+                  <button class="pill-option" type="button" data-flow="continuous" role="tab" aria-selected="false" aria-label="Horizontal scrolling" data-help="Scroll horizontally." tabindex="-1">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18 8 4 4-4 4"></path><path d="M2 12h20"></path><path d="m6 8-4 4 4 4"></path></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="display-control-row display-scale-row" role="group" aria-labelledby="scaleLabel">
+                <span id="scaleLabel">Scale</span>
+                <button class="drag-number" id="verticalScale" type="button" aria-label="Vertical scale" data-value="100" data-help="Drag vertically to resize notation.">100%</button>
+                <button class="drag-number" id="horizontalScale" type="button" aria-label="Horizontal scale" data-value="100" data-help="Drag vertically to change spacing.">100%</button>
+              </div>
+              <button class="icon-button display-utility display-fullscreen" id="fullscreen" type="button" aria-label="Enter full screen" data-help="Toggle full screen.">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+              </button>
+              <div class="display-control-row display-feature-row display-annotation-row">
+                <button class="binary-feature-button display-lyrics-toggle" id="annotationLayout" type="button" aria-pressed="false" data-help="Share matching parts; show only syllable changes.">Compact Lyrics</button>
+              </div>
+            </div>
+          </section>
+          <section class="control-group tools-group" aria-labelledby="toolsLabel">
+            <span class="group-label" id="toolsLabel">Tools</span>
+            <button class="icon-button" id="noteMode" type="button" aria-label="Add annotation at selected score position" title="Annotate" data-help="Annotate the selected score position.">
+              <!-- Lucide Pencil, ISC license: https://lucide.dev/icons/pencil -->
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></svg>
+            </button>
+            <!-- YouTube: unchanged Simple Icons path, CC0; Google LLC trademark. -->
+            <a class="icon-button display-demo" id="demoVideo" href="#" target="_blank" rel="noopener noreferrer" aria-label="Watch the demo recording" title="YouTube recording" data-help="Open the demo recording on YouTube." hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="7" width="9" height="10" fill="white"></rect><path fill="#ff0000" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"></path></svg>
+            </a>
+            <div class="practice-files" role="group" aria-label="Score files">
+              <a class="icon-button practice-file" id="printScore" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open printable PDF score" title="Preview PDF in a new tab" data-help="Open the print-layout score as a PDF." hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6M8 13h8M8 17h8"></path></svg><span>PDF</span>
+              </a>
+              <button class="icon-button practice-file" id="downloadScore" type="button" aria-label="Download MuseScore (.mscz)" title="Download MuseScore (.mscz)" data-help="Save the editable MuseScore file. Preview it with PDF." hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg><span>MSCZ</span>
+              </button>
+            </div>
+            <a class="icon-button" id="download" href="#" download aria-label="Download standalone score with current settings and annotations" title="Save offline copy" data-help="Download offline copy with settings and annotations.">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg>
+            </a>
+            <button class="icon-button display-theme" id="themeToggle" type="button" aria-label="Switch to dark theme" data-help="Switch between the light and dark palette.">
+              <!-- Lucide Moon / Sun, ISC license: https://lucide.dev/ -->
+              <svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.25 6.25 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path></svg>
+              <svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path></svg>
+            </button>
+            <button class="icon-button display-help" id="settingsHelp" type="button" aria-pressed="false" aria-label="Show setting help" title="Setting help">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+            </button>
+          </section>
+        </div>
+      </div>
+    </header>
+
+    <main class="score-shell" id="scoreShell">
+      <div class="loading-card" id="scoreLoading" role="status">
+        <span class="loading-dot" aria-hidden="true"></span>
+        <span id="scoreLoadingText">Engraving score…</span>
+      </div>
+      <div class="score" id="score" aria-label="{{TITLE}} rehearsal score"></div>
+      <div class="bar-score" id="barScore" aria-label="{{TITLE}} pitch-bar score" hidden></div>
+    </main>
+
+    <button class="playback-return" id="playbackReturn" type="button" aria-hidden="true" tabindex="-1">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5m-6 6 6-6 6 6"></path></svg>
+    </button>
+
+    <div class="toast" id="toast" role="status" aria-live="polite">
+      <span id="toastMessage"></span>
+      <button class="toast-undo" id="toastUndo" type="button" hidden>Undo</button>
+    </div>
+    <div class="settings-tooltip" id="settingsTooltip" role="tooltip" aria-hidden="true" hidden></div>
+    <aside class="settings-tooltip shortcut-tip" id="shortcutTip" aria-label="Shortcut tip" hidden>
+      <span id="shortcutTipMessage" role="status" aria-live="polite" aria-atomic="true"></span>
+      <button class="icon-button" id="shortcutTipDismiss" type="button" aria-label="Dismiss shortcut tip" title="Dismiss shortcut tip">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+      </button>
+    </aside>
+    <script src="./app.js" data-inline></script>
+    <!-- THIRD_PARTY_NOTICES -->
+  </body>
+</html>
