@@ -45,6 +45,7 @@ class PortabilityTests(unittest.TestCase):
 
     def test_path_detection_prefers_version_four(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(Path, "home", return_value=ROOT / "synthetic-home"), \
                 mock.patch.object(Path, "is_file", return_value=False), \
                 mock.patch.object(builder.shutil, "which", side_effect=lambda name:
                     "/bin/musescore4" if name == "musescore4" else None):
@@ -53,12 +54,14 @@ class PortabilityTests(unittest.TestCase):
     def test_windows_standard_install_location(self):
         expected = Path("D:/Apps/MuseScore 4/bin/MuseScore4.exe")
         with mock.patch.dict(os.environ, {"ProgramFiles": "D:/Apps"}, clear=True), \
+                mock.patch.object(Path, "home", return_value=ROOT / "synthetic-home"), \
                 mock.patch.object(builder.sys, "platform", "win32"), \
                 mock.patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path == expected):
             self.assertEqual(builder.find_musescore(), expected.resolve())
 
     def test_missing_musescore_explains_musicxml_fallback(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(Path, "home", return_value=ROOT / "synthetic-home"), \
                 mock.patch.object(Path, "is_file", return_value=False), \
                 mock.patch.object(builder.shutil, "which", return_value=None):
             with self.assertRaisesRegex(builder.BuildError, "Alternatively export uncompressed MusicXML"):

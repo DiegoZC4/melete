@@ -2562,7 +2562,7 @@ data:font/woff2;base64,AA
   <part id="P1"><measure number="1"/></part>
 </score-partwise>
 '''
-            (assets / "score.musicxml").write_text(score, encoding="utf-8")
+            (assets / "score.musicxml").write_bytes(score.encode("utf-8"))
             source_hash = build_trainer.sha256(b"source archive")
             metadata = {
                 "layoutBreaksRemoved": 7,
