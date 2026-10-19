@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -20,6 +21,33 @@ SPEC.loader.exec_module(build_trainer)
 
 
 class PipelineTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not installed")
+    def test_build_preserves_project_and_third_party_licenses(self) -> None:
+        own_license = (ROOT / "LICENSE").read_text(encoding="utf-8")
+        self.assertEqual(json.loads((ROOT / "package.json").read_text())["license"], "MIT")
+        lock = json.loads((ROOT / "package-lock.json").read_text())
+        self.assertEqual(lock["packages"][""]["license"], "MIT")
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "player"
+            subprocess.run(
+                [sys.executable, str(ROOT / "build_trainer.py"),
+                 str(ROOT / "tests/fixtures/shared-regressions.musicxml"),
+                 "--project-dir", str(project)],
+                check=True, capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual((project / "LICENSE").read_text(encoding="utf-8"), own_license)
+            for relative in ("index.html", "dist/index.html"):
+                with self.subTest(document=relative):
+                    document = (project / relative).read_text(encoding="utf-8")
+                    self.assertIn(own_license.strip(), document)
+                    self.assertIn("Third-party components retain their respective licenses", document)
+                    for vendor_license in (
+                        "alphatab/LICENSE", "alphatab/font/Bravura-OFL.txt",
+                        "lucide/LICENSE", "pitchy/LICENSE", "fft/LICENSE",
+                    ):
+                        text = (ROOT / "vendor" / vendor_license).read_text(encoding="utf-8")
+                        self.assertIn(build_trainer.safe_script_text(text.strip()), document)
+
     def test_song_title_uses_melete_without_replacing_the_song_name(self) -> None:
         template = (ROOT / "template" / "index.html").read_text(encoding="utf-8")
         document = build_trainer.decorate_head(template, "Song & Choir", "M", "test")

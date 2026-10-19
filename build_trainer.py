@@ -1012,6 +1012,7 @@ def copy_builder_sources(project_dir: Path) -> None:
     project_dir.mkdir(parents=True, exist_ok=True)
     for filename in ("index.html", "styles.css", "app.js"):
         shutil.copy2(TEMPLATE_DIR / filename, project_dir / filename)
+    shutil.copy2(ROOT / "LICENSE", project_dir / "LICENSE")
     shutil.copytree(VENDOR_DIR, project_dir / "vendor", dirs_exist_ok=True)
 
 
@@ -1151,6 +1152,7 @@ def verify_pitchy_runtime(runtime: str) -> None:
 
 
 def third_party_notices(
+    melete_license: str,
     alpha_license: str,
     font_license: str,
     lucide_license: str,
@@ -1158,6 +1160,10 @@ def third_party_notices(
     fft_license: str,
 ) -> str:
     return (
+        "Melete (original code and documentation)\n"
+        "https://github.com/DiegoZC4/melete\n\n"
+        f"{melete_license.strip()}\n\n"
+        "Third-party components retain their respective licenses below.\n\n"
         "alphaTab\n"
         "https://github.com/CoderLine/alphaTab\n\n"
         "Corresponding source (1.8.4, build 34):\n"
@@ -1642,6 +1648,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         template = read_required(TEMPLATE_DIR / "index.html")
         styles = read_required(TEMPLATE_DIR / "styles.css")
         app = read_required(TEMPLATE_DIR / "app.js")
+        melete_license = read_required(ROOT / "LICENSE")
         alphatab = read_required(VENDOR_DIR / "alphatab" / "alphaTab.min.js")
         fft_source = read_required(VENDOR_DIR / "fft" / "fft.js")
         pitchy_source = read_required(VENDOR_DIR / "pitchy" / "index.js")
@@ -1658,6 +1665,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         assert isinstance(template, str)
         assert isinstance(styles, str)
         assert isinstance(app, str)
+        assert isinstance(melete_license, str)
         assert isinstance(alphatab, str)
         assert isinstance(fft_source, str)
         assert isinstance(pitchy_source, str)
@@ -1683,6 +1691,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 ("template", template.encode("utf-8")),
                 ("styles", styles.encode("utf-8")),
                 ("app", app.encode("utf-8")),
+                ("melete-license", melete_license.encode("utf-8")),
                 ("alphatab", alphatab.encode("utf-8")),
                 ("alphatab-license", alpha_license.encode("utf-8")),
                 ("pitchy-runtime", pitchy.encode("utf-8")),
@@ -1725,6 +1734,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         atomic_write(build_metadata_path, stable_json(metadata, pretty=True))
 
         notices = third_party_notices(
+            melete_license,
             alpha_license,
             font_license,
             lucide_license,

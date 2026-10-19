@@ -126,6 +126,17 @@ with a fresh ZIP. There is no automatic upload or website deployment step.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for regression tests and future updates,
 and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled-library licenses.
 
+## License
+
+Melete's original code and documentation are available under the [MIT License](LICENSE).
+Bundled libraries, fonts, and icons retain their respective licenses, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). New builds include the MIT notice
+alongside those third-party notices in both the development page and standalone
+HTML, and copy `LICENSE` into the generated project.
+
+The software license does not grant rights to any scores, lyrics, or recordings
+you convert or share.
+
 ## Slurred Playback
 
 Slur continuity belongs to the shared builder, not just the Get It Right adapter.

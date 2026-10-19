@@ -1,6 +1,7 @@
 {
   "name": "melete",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "description": "MuseScore and MusicXML to self-contained choir practice HTML",
   "engines": { "node": ">=22" },

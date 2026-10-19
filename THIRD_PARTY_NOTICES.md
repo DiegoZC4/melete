@@ -1,5 +1,8 @@
 # Third-Party Notices
 
+Melete's original code and documentation use the [MIT License](LICENSE).
+That license does not replace the licenses of the third-party components below.
+
 The following runtime libraries are bundled so conversion and rehearsal playback
 do not need a CDN. They retain their own licenses. Their existing license files
 and attribution comments must remain with redistributed copies. The builder
