@@ -17,8 +17,10 @@
   const partPaint = (index) => `var(--part-${(index % PALETTE.length) + 1}, ${PALETTE[index % PALETTE.length]})`;
   const TEMPO_VALUES = Object.freeze([25, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150]);
   const VERTICAL_VALUES = Object.freeze([50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160]);
-  const STANDARD_HORIZONTAL_VALUES = Object.freeze([5, 10, 15, 20, 25, 35, 50, 65, 80, 100, 120, 140, 160, 180, 200]);
-  const HORIZONTAL_VALUES = Object.freeze(Array.from({ length: 40 }, (_, index) => (index + 1) * 5));
+  const STANDARD_HORIZONTAL_VALUES = Object.freeze([5, 10, 15, 20, 25, 35, 50, 65, 80, 100, 120, 140, 160, 180, 200,
+    220, 240, 260, 280, 300, 320, 340, 360, 380, 400]);
+  const HORIZONTAL_VALUES = Object.freeze(Array.from({ length: 80 }, (_, index) => (index + 1) * 5));
+  const PITCH_BAR_UNIT_WIDTH = 16;
   const VOLUME_VALUES = Object.freeze(Array.from({ length: 31 }, (_, index) => index * 5));
   const PAN_VALUES = Object.freeze(Array.from({ length: 41 }, (_, index) => index * 5 - 100));
   const METRONOME_VALUES = Object.freeze(Array.from({ length: 11 }, (_, index) => index * 10));
@@ -57,6 +59,7 @@
   let api = null;
   let engine = null;
   let sequence = null;
+  let pitchBarUnitTicks = 960;
   let config = {};
   let buildMetadata = {};
   let portableState = null;
@@ -1238,6 +1241,7 @@
   const horizontalControl = createDragNumber(elements.horizontalScale, {
     values: HORIZONTAL_VALUES,
     stepValues: () => scoreView === "bars" ? HORIZONTAL_VALUES : STANDARD_HORIZONTAL_VALUES,
+    pixelsPerStep: 4,
     defaultValue: () => preferenceDefaults().horizontal,
     format: (value) => `${value}%`,
     aria: (value) => `${value} percent horizontal scale`,
@@ -5447,6 +5451,55 @@
     }
   }
 
+  function shortestPitchBarNoteTicks(xml, playback) {
+    const documentXml = new DOMParser().parseFromString(xml, "application/xml");
+    let shortest = Infinity;
+    // Use written durations, not MIDI gate lengths or time borrowed by grace
+    // notes. Scan every part once so visibility and practice-part changes do
+    // not change the horizontal scale.
+    for (const part of documentXml.querySelectorAll("score-partwise > part")) {
+      let divisions = 0;
+      for (const measure of part.children) {
+        for (const element of measure.children) {
+          if (element.localName === "attributes") {
+            const next = Number(element.querySelector("divisions")?.textContent);
+            if (Number.isFinite(next) && next > 0) divisions = next;
+          }
+          if (element.localName !== "note" || !divisions
+            || element.querySelector("rest, grace")) continue;
+          const duration = Number(element.querySelector("duration")?.textContent);
+          const ticks = duration / divisions * playback.division;
+          if (Number.isFinite(ticks) && ticks > 0) shortest = Math.min(shortest, ticks);
+        }
+      }
+    }
+    if (Number.isFinite(shortest)) return shortest;
+    for (const [, start, end] of playback.notes || []) {
+      const duration = end - start;
+      if (Number.isFinite(duration) && duration > 0) shortest = Math.min(shortest, duration);
+    }
+    return Number.isFinite(shortest) ? shortest : playback.division || 960;
+  }
+
+  function pitchBarRows(measures, pixelsPerTick, availableWidth, continuous) {
+    const rows = [];
+    let first = 0;
+    while (first < measures.length) {
+      const startTick = measures[first][0];
+      let last = first;
+      while (last + 1 < measures.length) {
+        const next = measures[last + 1];
+        if (!continuous && (next[0] + next[1] - startTick) * pixelsPerTick > availableWidth) break;
+        last += 1;
+      }
+      const endTick = measures[last][0] + measures[last][1];
+      rows.push({ first, measures: measures.slice(first, last + 1), startTick, endTick,
+        plotWidth: (endTick - startTick) * pixelsPerTick });
+      first = last + 1;
+    }
+    return rows;
+  }
+
   function visiblePitchNotes() {
     return (sequence?.notes || []).filter(([track, startTick, endTick]) =>
       visibleTracks.has(track) && endTick > startTick);
@@ -6035,27 +6088,27 @@
     const lyrics = pitchBarLyrics();
     const chapters = new Set(autoChapters().map((chapter) => measureIndexAtTick(chapter.tick)));
     const continuous = flow === "continuous";
-    const availableWidth = Math.max(280, elements.scoreShell.clientWidth - 10);
-    const measureWidth = clamp(126 * horizontalControl.value() / 100, 18, 280);
-    const measuresPerLine = continuous
-      ? sequence.measures.length
-      : clamp(Math.floor((availableWidth - 36) / measureWidth), 1, sequence.measures.length);
+    const availableWidth = elements.barScore.clientWidth;
+    const pixelsPerTick = PITCH_BAR_UNIT_WIDTH * horizontalControl.value() / 100 / pitchBarUnitTicks;
     const typographyScale = verticalControl.value() / 100;
     const pitchStep = clamp(5.5 * typographyScale, 3, 10);
     const lyricFontSize = LYRIC_FONT_SIZE * typographyScale;
     const lyricLineHeight = 17.5 * typographyScale;
     const measureFontSize = 11 * typographyScale;
     const repeatSignHeight = measureFontSize * 0.78;
+    const leftPad = 34;
+    // Leave a gutter for the next-line pitch cues beyond the closing barline.
+    const rightPad = pitchStep * 2 + 2;
+    const rows = pitchBarRows(sequence.measures, pixelsPerTick, availableWidth - leftPad - rightPad, continuous);
+    elements.barScore.classList.toggle("has-horizontal-overflow",
+      rows.some((row) => row.plotWidth + leftPad + rightPad > availableWidth));
     elements.barScore.style.setProperty("--bar-measure-font-size", `${measureFontSize}px`);
     elements.barScore.style.setProperty("--bar-lyric-font-size", `${lyricFontSize}px`);
     const fragment = document.createDocumentFragment();
     const nextSystems = [];
 
-    for (let first = 0, systemIndex = 0; first < sequence.measures.length; first += measuresPerLine, systemIndex += 1) {
-      const rowMeasures = sequence.measures.slice(first, first + measuresPerLine);
-      const startTick = rowMeasures[0][0];
-      const lastMeasure = rowMeasures.at(-1);
-      const endTick = lastMeasure[0] + lastMeasure[1];
+    for (const [systemIndex, row] of rows.entries()) {
+      const { first, measures: rowMeasures, startTick, endTick, plotWidth } = row;
       const rowSegments = segments.filter((segment) => segment.endTick > startTick && segment.startTick < endTick);
       const rowPitches = rowSegments.map((segment) => segment.pitch);
       // Where each part goes at the line break. A leap is only readable if you
@@ -6064,8 +6117,7 @@
       // is never off the top or bottom. Only parts singing on this line are
       // marked: without a note to leap from there is no leap to show, and an
       // entry from another register would stretch the line for nothing.
-      const nextMeasures = sequence.measures.slice(first + measuresPerLine, first + measuresPerLine * 2);
-      const nextEndTick = nextMeasures.length ? nextMeasures.at(-1)[0] + nextMeasures.at(-1)[1] : endTick;
+      const nextEndTick = rows[systemIndex + 1]?.endTick ?? endTick;
       const continuations = [...new Set(rowSegments.flatMap((segment) => segment.tracks))].flatMap((track) => {
         const next = segments.find((segment) => segment.tracks.includes(track)
           && segment.endTick > endTick && segment.startTick < nextEndTick);
@@ -6075,13 +6127,7 @@
       const baseMinPitch = (rowPitches.length ? Math.min(...rowPitches, ...reachPitches) : 60) - 1;
       const baseMaxPitch = (rowPitches.length ? Math.max(...rowPitches, ...reachPitches) : 60) + 1;
       const { minPitch, maxPitch, referencePitch } = pitchGuideRange(baseMinPitch, baseMaxPitch);
-      const leftPad = 34;
-      // The gutter past the closing barline, which the line-break cues stand in
-      // so they read as what comes next rather than as part of this line. It is
-      // cut to the cue's own size, which follows the row height.
-      const rightPad = pitchStep * 2 + 2;
       const topPad = 18;
-      const plotWidth = continuous ? rowMeasures.length * measureWidth : availableWidth - leftPad - rightPad;
       const plotHeight = (maxPitch - minPitch + 2) * pitchStep;
       const rowLyrics = lyrics.filter((lyric) => lyric[1] >= startTick && lyric[1] < endTick);
       const lyricVerses = [...new Set(rowLyrics.map((lyric) => lyric[2]))].sort((a, b) => a - b);
@@ -6096,7 +6142,7 @@
       shell.className = "bar-system";
       shell.dataset.startTick = String(startTick);
       shell.dataset.endTick = String(endTick);
-      if (continuous) shell.style.width = `${viewWidth}px`;
+      shell.style.width = `${viewWidth}px`;
       const svg = createSvgElement("svg", {
         viewBox: `0 0 ${viewWidth} ${viewHeight}`,
         role: "img",
@@ -7352,8 +7398,8 @@
     const bottomLimit = window.innerHeight - 20;
     if (bounds.bottom < topLimit) return "up";
     if (bounds.top > bottomLimit) return "down";
-    if (flow === "continuous" || elements.score.classList.contains("has-horizontal-overflow")) {
-      const scoreSurface = scoreView === "bars" ? elements.barScore : elements.score;
+    const scoreSurface = scoreView === "bars" ? elements.barScore : elements.score;
+    if (flow === "continuous" || scoreSurface.classList.contains("has-horizontal-overflow")) {
       const scoreBounds = scoreSurface.getBoundingClientRect();
       const leftLimit = Math.max(0, scoreBounds.left) + 10;
       const rightLimit = Math.min(window.innerWidth, scoreBounds.right) - 10;
@@ -7908,6 +7954,7 @@
       if (!Number.isFinite(sequence.division) || !Number.isFinite(sequence.endTick) || !sequence.notes?.length || !sequence.measures?.length) {
         throw new Error("Playback data is incomplete");
       }
+      pitchBarUnitTicks = shortestPitchBarNoteTicks(fullScoreXml, sequence);
       parts = normalizeParts(sequence.parts);
       if (!parts.length) throw new Error("No score parts were found");
       configurePitchGuides(fullScoreXml);

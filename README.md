@@ -205,6 +205,16 @@ short run or across rests and barlines. A return after different words is shown
 again. Pitchbar view uses the same repeat rule. No source or playback data is
 edited, and turning Compact Lyrics off restores every original lyric.
 
+Horizontal stretch ranges from 5% to 400%. Pitchbar uses the shortest measured
+note in the complete score as its time unit: 16 CSS pixels at 100%, 32 at 200%,
+and 64 at 400%. Written durations include dots and tuplets; unmeasured grace
+notes and playback articulation do not set the unit. Changing visible parts
+does not change it. Measures receive width proportional to their duration,
+and wrapped lines may end early to keep the same time scale throughout. A
+single measure wider than the viewport can be panned without shrinking the
+notes or lyrics. Crowded lyrics still use extra rows without moving their
+note anchors. Standard notation retains AlphaTab's engraving-based spacing.
+
 Press a notehead or pitchbar to hear its sounding pitch immediately. Release
 before 250 ms to also move the playhead; keep holding to sustain the preview
 without seeking. Every release starts the click-free fade immediately, with no

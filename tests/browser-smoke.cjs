@@ -10,6 +10,7 @@ const {checkMeasureRests} = require('./browser-rest-layout.cjs');
 const {checkCursorEdges} = require('./browser-cursor-layout.cjs');
 const {checkPanHolds} = require('./browser-pan-hold.cjs');
 const {checkFirstVisit, checkTouchVolumeTip, checkPartLinks, checkTouchRows, checkScrubLabel} = require('./browser-onboarding.cjs');
+const {pitchbarProbe, checkPitchbarSpacing} = require('./browser-pitchbar-spacing.cjs');
 
 async function main() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'melete-shared-smoke-'));
@@ -23,7 +24,7 @@ async function main() {
     const marker = 'engine = new GuideEngine(sequence);';
     assert.equal(html.split(marker).length, 2);
     html = html.replace(marker, marker + `
-      window.__qa = {engine, api, onsets: [], get busy() { return notationRenderInFlight || notationRenderQueued; }};
+      window.__qa = {engine, api, onsets: [], ${pitchbarProbe}, get busy() { return notationRenderInFlight || notationRenderQueued; }};
       const scheduleNote = engine.scheduleNote;
       engine.scheduleNote = function(note, ...args) {
         const before = this.scheduled.size;
@@ -103,9 +104,11 @@ async function main() {
         await page.waitForFunction(() => !__qa.busy && __qa.api.settings.display.stretchForce === .05);
         const restLayout = await checkMeasureRests(page, 4, 3);
         await page.locator('#horizontalScale').press('End');
-        await page.waitForFunction(() => !__qa.busy && __qa.api.settings.display.stretchForce === 2);
+        await page.waitForFunction(() => !__qa.busy && __qa.api.settings.display.stretchForce === 4);
         await checkMeasureRests(page, 4, 3);
         const cursorEdges = await checkCursorEdges(page);
+        const pitchbarSpacing = await checkPitchbarSpacing(page, page, {output, label: mobile ? 'mobile' : 'desktop'});
+        await settled();
         await page.evaluate(() => __qa.engine.seek(0));
         if (mobile) await page.locator('#settingsToggle').click();
         await page.locator('#playPause').click();
@@ -157,6 +160,7 @@ async function main() {
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), saved);
         assert.equal(await page.locator('#partChooser').isVisible(), false, 'an answered chooser is not asked again');
         assert.equal(await page.locator('#practicePart').getAttribute('data-value'), '1');
+        assert.equal(await page.locator('#horizontalScale').getAttribute('data-value'), '400');
         assert.deepEqual(await page.locator('[data-pan-index]').evaluateAll(nodes => nodes.map(node => Number(node.dataset.value))),
           [-100, 100, -100], 'pan separation survives reload');
         if (mobile && await page.locator('#settingsToggle').getAttribute('aria-expanded') !== 'true')
@@ -171,7 +175,7 @@ async function main() {
         const touchRows = await checkTouchRows(page, page, {mobile});
         const partLinks = await checkPartLinks(page, origin, settled, {names});
         results.push({viewport: mobile ? 'mobile' : 'desktop', visibilitySubsets: 7, onsetChecks: 4, savedScale: saved,
-          fullMeasureRests: {scales:[5,200], count:restLayout.length}, cursorEdges, panHolds,
+          fullMeasureRests: {scales:[5,400], count:restLayout.length}, cursorEdges, panHolds, pitchbarSpacing,
           firstVisit, touchTip, scrubLabel, touchRows, partLinks});
       } finally { await context.close(); }
     }

@@ -1334,7 +1334,7 @@ console.log(JSON.stringify(sweepSupersededStorage("autumn")));
         self.assertIn('const cue = createSvgElement("polygon", {', app)
         # The gutter is cut to the cue at whatever height the rows are, so no
         # fixed value can be outgrown and clip it.
-        self.assertIn("      const rightPad = pitchStep * 2 + 2;", app)
+        self.assertIn("const rightPad = pitchStep * 2 + 2;", app)
         self.assertIn("const middle = topPad + (maxPitch - pitch + 1) * pitchStep;", app)
         self.assertIn("const baseMinPitch = (rowPitches.length ? Math.min(...rowPitches, ...reachPitches) : 60) - 1;", app)
         self.assertIn("const baseMaxPitch = (rowPitches.length ? Math.max(...rowPitches, ...reachPitches) : 60) + 1;", app)
@@ -1794,7 +1794,7 @@ console.log(JSON.stringify({{
     def test_pitchbar_stretch_uses_uniform_five_percent_steps(self) -> None:
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")
         self.assertIn(
-            "const HORIZONTAL_VALUES = Object.freeze(Array.from({ length: 40 }, (_, index) => (index + 1) * 5))",
+            "const HORIZONTAL_VALUES = Object.freeze(Array.from({ length: 80 }, (_, index) => (index + 1) * 5))",
             app,
         )
         self.assertIn(

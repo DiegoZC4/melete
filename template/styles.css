@@ -1088,7 +1088,8 @@ button { color: inherit; }
 .score:not(.is-continuous),
 .bar-score:not(.is-continuous) { touch-action: pan-y; }
 
-.score.has-horizontal-overflow { overflow-x: auto; overflow-y: hidden; touch-action: pan-x pan-y; }
+.score.has-horizontal-overflow,
+.bar-score.has-horizontal-overflow { overflow-x: auto; overflow-y: hidden; touch-action: pan-x pan-y; }
 .score .at-surface { min-width: var(--notation-content-width, 0); overflow: visible !important; }
 .score .at-surface-svg { overflow: visible; }
 
@@ -1775,7 +1776,7 @@ textarea:focus-visible {
   .parts-group { max-width: 100%; grid-column: 1 / -1; }
   .mixer-scroll { width: 100%; }
   .mixer { grid-template-columns: repeat(calc(var(--part-count) + 1), minmax(36px, 1fr)); }
-  .mixer > * { width: 100%; min-width: 0; max-width: none; }
+  .mixer > *, .mixer .drag-number { width: 100%; min-width: 0; max-width: none; }
   .practice-group { max-width: 100%; }
   .display-group { max-width: 100%; }
   .tools-group {
