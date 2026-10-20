@@ -38,7 +38,17 @@ browser context (no server), and checks desktop/mobile layouts, all visible-part
 subsets, section frames, rests, first/seek note playback, actual audio output,
 pan holds with mouse/touch/keyboard, and persisted settings. External requests
 fail the test. It closes the browser and deletes its temporary build in a
-`finally` block. Small reports and two screenshots are retained in ignored `qa/`.
+`finally` block. Small reports and review screenshots are retained in ignored `qa/`.
+
+The loop-recorder checks use a generated 997 Hz fake microphone, never a physical
+microphone. They validate bounded three-pass storage, independent WAV downloads,
+absence of guide-synth audio in the recording, permission denial/cancellation,
+transport edits, and independent Sing/recorder microphone ownership. Temporary
+WAVs are deleted with the test build. `QA_RECORDER_ONLY=1` runs just these focused
+browser checks; add `QA_FILE_ORIGIN=1` to verify a standalone file opened offline.
+Keep latency-sensitive audio/browser checks serialized against
+other tests using the same audio device; do not relax their timing assertions to
+accommodate competing render jobs.
 
 Where `heavy-run` is installed, run heavyweight tests through it, for example:
 

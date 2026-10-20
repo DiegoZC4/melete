@@ -35,8 +35,17 @@ async function checkPanHolds(surface, page, mobile, probe) {
   await hold(1);
   assert.deepEqual(await values(), separated(1));
   assert.match(await pans.nth(1).getAttribute('title'), /Hold to center all parts/);
-  await surface.waitForFunction(({probe, values}) => window[probe].engine.trackStrips.every((strip, index) =>
-    !strip.panner || Math.abs(strip.panner.pan.value - values[index] / 100) < .01), {probe, values: separated(1)});
+  try {
+    await surface.waitForFunction(({probe, values}) => window[probe].engine.trackStrips.every((strip, index) =>
+      !strip.panner || Math.abs(strip.panner.pan.value - values[index] / 100) < .01), {probe, values: separated(1)});
+  } catch (error) {
+    const state = await surface.evaluate(probe => ({
+      context: window[probe].engine.context?.state,
+      time: window[probe].engine.context?.currentTime,
+      pans: window[probe].engine.trackStrips.map(strip => strip.panner?.pan.value),
+    }), probe);
+    throw new Error(`Pan audio did not settle: ${JSON.stringify(state)}`, {cause: error});
+  }
   await hold(1);
   assert.deepEqual(await values(), Array(count).fill(0), 'second hold centers everyone, not just this dial');
   await pans.nth(0).press('Shift+Enter');

@@ -1677,6 +1677,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         assert isinstance(lucide_license, str)
         app, template, styles = install_compact_lyrics(app, template, styles)
         app = install_system_annotations(app)
+        app = read_required(TEMPLATE_DIR / "loop_recorder.js") + "\n" + app
         atomic_write(staged_project / "app.js", app)
         atomic_write(staged_project / "styles.css", styles)
         pitchy = pitchy_browser_runtime(fft_source, pitchy_source)

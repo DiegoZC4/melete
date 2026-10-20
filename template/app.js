@@ -143,6 +143,16 @@
   let pitchTraceCount = 0;
   let pitchTraceSaveTimer = 0;
   let pitchCaptureState = "off";
+  let microphoneRequest = null;
+  let takeState = "off";
+  let takeRequestGeneration = 0;
+  let takeCapture = null;
+  let takeBuffer = null;
+  let takeSession = null;
+  let takeRefreshTimer = 0;
+  let takePreviewUrl = null;
+  let takeStopPromise = null;
+  let takeNotice = "";
   let wantsPitchCapture = false;
   let pitchCaptureRequestGeneration = 0;
   let pitchCaptureStream = null;
@@ -225,6 +235,13 @@
     partChooserNote: document.getElementById("partChooserNote"),
     partChooserDismiss: document.getElementById("partChooserDismiss"),
     scrubLabel: document.getElementById("scrubLabel"),
+    loopRecorder: document.getElementById("loopRecorder"),
+    takePanel: document.getElementById("takePanel"),
+    closeTakes: document.getElementById("closeTakes"),
+    recordTake: document.getElementById("recordTake"),
+    takeStatus: document.getElementById("takeStatus"),
+    takeList: document.getElementById("takeList"),
+    takePreview: document.getElementById("takePreview"),
   };
 
   function clamp(value, minimum, maximum) {
@@ -4514,6 +4531,7 @@
     }
     if (scoreView === "bars" && sequence?.measures?.length) scheduleBarRender();
     if (persist) savePreferences();
+    if (elements.takePanel && !elements.takePanel.hidden) renderTakePanel();
   }
 
   function setLoopPoint(kind) {
@@ -4942,6 +4960,7 @@
         this.loopArmed = this.withinLoop(this.basePosition);
         this.playing = true;
         this.anchorTime = this.context.currentTime;
+        this.onTransportChange?.("play");
         this.resetScheduler();
         window.clearInterval(this.timer);
         this.timer = window.setInterval(() => this.update(), SCHEDULER_INTERVAL_MS);
@@ -4957,6 +4976,7 @@
     }
 
     pause() {
+      this.onTransportChange?.("pause");
       ++this.startRequest;
       ++this.transportRequest;
       this.starting = false;
@@ -4977,6 +4997,7 @@
       // wraps once it has been inside the loop, so landing beyond it plays on
       // instead of snapping straight back.
       const requested = clamp(seconds, 0, this.duration);
+      if (Math.abs(requested - this.currentSeconds()) > 0.02) this.onTransportChange?.("seek");
       this.basePosition = requested;
       this.loopArmed = this.withinLoop(requested);
       if (this.context) this.anchorTime = this.context.currentTime;
@@ -4988,6 +5009,7 @@
     setRate(nextRate) {
       const next = clamp(Number(nextRate) || 1, 0.25, 1.5);
       if (Math.abs(next - this.rate) < 0.000001) return;
+      this.onTransportChange?.("rate");
       this.basePosition = this.currentSeconds();
       this.rate = next;
       if (this.context) this.anchorTime = this.context.currentTime;
@@ -5023,6 +5045,10 @@
     }
 
     setLoop(startTick, endTick) {
+      const valid = Number.isFinite(startTick) && Number.isFinite(endTick) && endTick > startTick;
+      const nextStart = valid ? this.secondsAtTick(startTick) : null;
+      const nextEnd = valid ? this.secondsAtTick(endTick) : null;
+      if (nextStart !== this.loopStartSeconds || nextEnd !== this.loopEndSeconds) this.onTransportChange?.("range");
       if (!Number.isFinite(startTick) || !Number.isFinite(endTick) || endTick <= startTick) {
         this.loopStartSeconds = null;
         this.loopEndSeconds = null;
@@ -5305,6 +5331,7 @@
       if (this.loopArmed && this.hasLoop() && position >= this.loopEndSeconds - 0.002) {
         this.basePosition = this.loopStartSeconds;
         this.anchorTime = this.context.currentTime;
+        this.onTransportChange?.("loop");
         this.stopVoices(0.012);
         this.resetScheduler(0.032);
         this.pushPosition();
@@ -6898,9 +6925,8 @@
     pitchCaptureRequestGeneration += 1;
     stopPitchSampling();
     pitchCaptureState = "off";
-    try { pitchCaptureSource?.disconnect(); } catch {}
-    pitchCaptureStream?.getAudioTracks().forEach((track) => { track.enabled = false; });
-    if (pitchCaptureContext && pitchCaptureContext !== engine?.context) void pitchCaptureContext.suspend();
+    try { if (pitchCaptureAnalyser) pitchCaptureSource?.disconnect(pitchCaptureAnalyser); } catch {}
+    syncMicrophoneActivity();
     updatePitchCaptureAppearance();
     savePreferences();
     if (announce) showToast("Microphone off");
@@ -6917,70 +6943,87 @@
     showToast(playing ? "Microphone on · recording pitch" : "Microphone on · press play to record");
   }
 
+  function syncMicrophoneActivity() {
+    const active = pitchCaptureState !== "off" || takeState !== "off";
+    pitchCaptureStream?.getAudioTracks().forEach(track => { track.enabled = active; });
+    if (!active && pitchCaptureContext && pitchCaptureContext !== engine?.context) void pitchCaptureContext.suspend();
+  }
+
+  async function ensureMicrophoneInput() {
+    engine.ensureAudio();
+    // Keep capture independent of synth-voice graph churn and isolated outputs.
+    if (!pitchCaptureContext) {
+      pitchCaptureContext = new (window.AudioContext || window.webkitAudioContext)({latencyHint: "interactive"});
+      new Set([pitchCaptureContext, engine.context]).forEach(context => {
+        context.addEventListener("statechange", () => {
+          if (["armed", "recording"].includes(takeState) && context.state !== "running") {
+            void stopTakeRecording("Stopped: audio interrupted", true);
+          }
+        });
+      });
+    }
+    await Promise.all([engine.context.resume(), pitchCaptureContext.resume()]);
+    if (pitchCaptureStream?.getAudioTracks()[0]?.readyState === "live" && pitchCaptureSource) {
+      syncMicrophoneActivity();
+      return;
+    }
+    if (!microphoneRequest) {
+      microphoneRequest = (async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+          channelCount: { ideal: 1 }, echoCancellation: { ideal: false },
+          noiseSuppression: { ideal: false }, autoGainControl: { ideal: false },
+        } });
+        stream.getAudioTracks().forEach(track => {
+          try { if ("contentHint" in track) track.contentHint = "music"; } catch {}
+        });
+        try { pitchCaptureSource?.disconnect(); } catch {}
+        pitchCaptureStream = stream;
+        pitchCaptureSource = pitchCaptureContext.createMediaStreamSource(stream);
+        pitchCaptureAnalyser = pitchCaptureContext.createAnalyser();
+        pitchCaptureAnalyser.fftSize = PITCH_CAPTURE_BUFFER_SIZE;
+        pitchCaptureAnalyser.smoothingTimeConstant = 0;
+        pitchCaptureDetector = window.Pitchy.PitchDetector.forFloat32Array(PITCH_CAPTURE_BUFFER_SIZE);
+        pitchCaptureDetector.clarityThreshold = 0.9;
+        pitchCaptureDetector.minVolumeAbsolute = 0;
+        pitchCaptureBuffer = new Float32Array(PITCH_CAPTURE_BUFFER_SIZE);
+        stream.getAudioTracks()[0]?.addEventListener("ended", () => {
+          if (pitchCaptureStream !== stream) return;
+          disablePitchCapture(false);
+          void stopTakeRecording("Microphone disconnected", true);
+          pitchCaptureStream = null;
+          showToast("The microphone was disconnected", "error");
+        }, { once: true });
+        stream.getAudioTracks()[0]?.addEventListener("mute", () => {
+          if (pitchCaptureStream === stream && takeState !== "off") {
+            void stopTakeRecording("Microphone interrupted", true);
+          }
+        });
+        syncMicrophoneActivity();
+      })().finally(() => { microphoneRequest = null; });
+    }
+    await microphoneRequest;
+  }
+
   async function startPitchCapture({ quiet = false } = {}) {
     if (!pitchCaptureSupported() || !engine) {
       if (!quiet) showToast("Microphone pitch tracking is unavailable here", "error");
-      return;
-    }
-    const cachedTrack = pitchCaptureStream?.getAudioTracks()[0];
-    if (cachedTrack?.readyState === "live" && pitchCaptureSource && pitchCaptureAnalyser && pitchCaptureDetector) {
-      try {
-        engine.ensureAudio();
-        await Promise.all([engine.context.resume(), pitchCaptureContext?.resume()]);
-        activateCachedPitchCapture();
-      } catch {
-        if (!quiet) showToast("Microphone pitch tracking could not resume", "error");
-      }
       return;
     }
     const generation = ++pitchCaptureRequestGeneration;
     pitchCaptureState = "requesting";
     updatePitchCaptureAppearance();
     try {
-      engine.ensureAudio();
-      // An isolated playback graph must not host the microphone, or Firefox
-      // would move it onto the microphone's device along with the input.
-      if (!pitchCaptureContext) {
-        pitchCaptureContext = engine.playbackIsolated
-          ? new (window.AudioContext || window.webkitAudioContext)()
-          : engine.context;
-      }
-      const [stream] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ audio: {
-          channelCount: { ideal: 1 }, echoCancellation: { ideal: false },
-          noiseSuppression: { ideal: false }, autoGainControl: { ideal: false },
-        } }),
-        engine.context.resume(),
-        pitchCaptureContext.resume(),
-      ]);
+      await ensureMicrophoneInput();
       if (generation !== pitchCaptureRequestGeneration) {
-        stream.getTracks().forEach((track) => track.stop());
+        syncMicrophoneActivity();
         return;
       }
-      stream.getAudioTracks().forEach((track) => {
-        try { if ("contentHint" in track) track.contentHint = "music"; } catch {}
-      });
-      pitchCaptureStream = stream;
-      pitchCaptureAnalyser = pitchCaptureContext.createAnalyser();
-      pitchCaptureAnalyser.fftSize = PITCH_CAPTURE_BUFFER_SIZE;
-      pitchCaptureAnalyser.smoothingTimeConstant = 0;
-      pitchCaptureSource = pitchCaptureContext.createMediaStreamSource(stream);
-      pitchCaptureDetector = window.Pitchy.PitchDetector.forFloat32Array(PITCH_CAPTURE_BUFFER_SIZE);
-      pitchCaptureDetector.clarityThreshold = 0.9;
-      pitchCaptureDetector.minVolumeAbsolute = 0;
-      pitchCaptureBuffer = new Float32Array(PITCH_CAPTURE_BUFFER_SIZE);
-      stream.getAudioTracks()[0]?.addEventListener("ended", () => {
-        pitchCaptureState = "off";
-        pitchCaptureStream = null;
-        updatePitchCaptureAppearance();
-        showToast("The microphone was disconnected", "error");
-      }, { once: true });
       activateCachedPitchCapture();
     } catch (error) {
       if (generation !== pitchCaptureRequestGeneration) return;
       console.error(error);
       pitchCaptureState = "off";
-      if (pitchCaptureContext && pitchCaptureContext !== engine?.context) void pitchCaptureContext.suspend();
+      syncMicrophoneActivity();
       updatePitchCaptureAppearance();
       if (!quiet) showToast(error?.name === "NotAllowedError" ? "Microphone access was blocked" : "Microphone pitch tracking could not start", "error");
     }
@@ -6989,6 +7032,207 @@
   function togglePitchCapture() {
     if (pitchCaptureEnabled() || pitchCaptureState === "requesting") disablePitchCapture();
     else void startPitchCapture();
+  }
+
+  function recordingLoopSpec() {
+    if (!ready || !engine?.hasLoop()) return null;
+    const range = loopTickRange();
+    const seconds = (engine.loopEndSeconds - engine.loopStartSeconds) / engine.rate;
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const label = `${elements.loopStart.textContent.trim()}-${elements.loopEnd.textContent.trim()}`;
+    const part = parts[practicePartIndex]?.short || parts[practicePartIndex]?.name || "voice";
+    return {seconds, label, part, rate: engine.rate, start: range.start,
+      key: JSON.stringify([range.start, range.end, engine.rate, part])};
+  }
+
+  function stopTakePreview() {
+    elements.takePreview.pause();
+    elements.takePreview.removeAttribute("src");
+    elements.takePreview.load();
+    elements.takePreview.hidden = true;
+    if (takePreviewUrl) URL.revokeObjectURL(takePreviewUrl);
+    takePreviewUrl = null;
+  }
+
+  function takeBlob(take) {
+    return new Blob([window.MeleteRecording.wavBytes(takeBuffer.samples(take), takeBuffer.sampleRate)], {type: "audio/wav"});
+  }
+
+  async function previewTake(id) {
+    if (takeState !== "off") return;
+    const take = takeBuffer?.takes.find(item => item.id === id);
+    if (!take || !takeBuffer.info(take).length) return;
+    engine?.pauseTransport();
+    stopTakePreview();
+    takePreviewUrl = URL.createObjectURL(takeBlob(take));
+    elements.takePreview.src = takePreviewUrl;
+    elements.takePreview.hidden = false;
+    elements.takePreview.setAttribute("aria-label", `Preview take ${take.id}`);
+    try { await elements.takePreview.play(); }
+    catch (error) {
+      if (error?.name !== "AbortError" && takePreviewUrl) showToast("Press play in the take preview", "error");
+    }
+  }
+
+  function downloadTake(id) {
+    if (takeState !== "off") return;
+    const take = takeBuffer?.takes.find(item => item.id === id);
+    if (!take || !takeBuffer.info(take).length) return;
+    const safe = value => String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "");
+    const url = URL.createObjectURL(takeBlob(take));
+    const link = document.createElement("a");
+    const partial = takeBuffer.info(take).complete ? "" : "-partial";
+    link.href = url;
+    link.download = `${safe(config.slug || config.title)}-${safe(takeSession.part)}-m${safe(takeSession.label)}-${Math.round(takeSession.rate * 100)}pct-take-${take.id}${partial}.wav`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  function renderTakePanel() {
+    const spec = recordingLoopSpec();
+    const active = takeState !== "off";
+    elements.loopRecorder.classList.toggle("is-recording", active);
+    elements.settingsToggle.classList.toggle("has-recording", active);
+    elements.settingsToggle.title = active ? "Settings; loop recording active" : "Settings";
+    elements.loopRecorder.classList.toggle("has-takes", Boolean(takeBuffer?.takes.length));
+    elements.loopRecorder.setAttribute("aria-label", active ? "Recording loop takes" : "Loop recordings");
+    elements.recordTake.classList.toggle("is-recording", active);
+    elements.recordTake.querySelector("span").textContent = active ? (takeState === "requesting" ? "Cancel" : "Stop") : "Record loop";
+    elements.recordTake.disabled = takeState === "stopping" || (!active && (!spec || spec.seconds > window.MeleteRecording.MAX_LOOP_SECONDS));
+    let status = takeNotice || (spec ? `${spec.label} · ${formatTime(spec.seconds * 1000)} per pass` : "Set a loop to record");
+    if (spec?.seconds > window.MeleteRecording.MAX_LOOP_SECONDS) status = "Choose a loop of 5 minutes or less";
+    if (takeState === "requesting") status = "Opening microphone...";
+    if (takeState === "armed") status = "Starting loop...";
+    if (takeState === "recording") status = `Recording take ${takeBuffer?.current?.id || ""}`;
+    if (takeState === "stopping") status = "Finishing take...";
+    if (elements.takeStatus.textContent !== status) elements.takeStatus.textContent = status;
+    const takes = [...(takeBuffer?.takes || [])].reverse();
+    const key = takes.map(take => take.id).join(",");
+    if (elements.takeList.dataset.ids !== key) {
+      elements.takeList.dataset.ids = key;
+      elements.takeList.replaceChildren(...takes.map(take => {
+        const row = document.createElement("div");
+        row.className = "take-row";
+        row.dataset.takeId = String(take.id);
+        // Lucide Play and Download, ISC license. Only generated IDs enter markup.
+        row.innerHTML = `<div class="take-row-label"><span>Take ${take.id}</span><small></small></div>
+          <button class="icon-button" type="button" aria-label="Listen to take ${take.id}" title="Listen to take ${take.id}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 14 9-14 9z"></path></svg></button>
+          <button class="icon-button" type="button" aria-label="Download take ${take.id} as WAV" title="Download take ${take.id} as WAV"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg></button>`;
+        const [preview, download] = row.querySelectorAll("button");
+        preview.addEventListener("click", () => { void previewTake(take.id); });
+        download.addEventListener("click", () => downloadTake(take.id));
+        return row;
+      }));
+    }
+    takes.forEach(take => {
+      const info = takeBuffer.info(take);
+      const row = elements.takeList.querySelector(`[data-take-id="${take.id}"]`);
+      const state = info.active ? "In progress" : info.complete ? "Complete" : "Partial";
+      const warning = info.gap ? " · Audio gap" : info.peak >= 0.999 ? " · Clipping" : info.peak < 0.001 && info.seconds > 1 ? " · Very quiet" : "";
+      const duration = info.seconds < 1 ? `${info.seconds.toFixed(1)}s` : formatTime(info.seconds * 1000);
+      row.querySelector("small").textContent = `${duration} · ${state}${warning}`;
+      row.querySelectorAll("button").forEach(button => { button.disabled = active || info.length === 0; });
+    });
+  }
+
+  function showTakePanel(show = true) {
+    elements.takePanel.hidden = !show;
+    elements.loopRecorder.setAttribute("aria-expanded", String(show));
+    if (show) {
+      hidePartChooser();
+      if (isMobileSettingsDevice()) setSettingsOpen(false);
+      renderTakePanel();
+      elements.recordTake.focus();
+    } else {
+      stopTakePreview();
+      elements.loopRecorder.focus();
+    }
+  }
+
+  async function startTakeRecording() {
+    if (takeState !== "off") { await stopTakeRecording("Stopped", true); return; }
+    const spec = recordingLoopSpec();
+    if (!spec || spec.seconds > window.MeleteRecording.MAX_LOOP_SECONDS) { renderTakePanel(); return; }
+    if (!pitchCaptureSupported()) { showToast("Microphone recording is unavailable here", "error"); return; }
+    stopTakePreview();
+    engine.pauseTransport();
+    api.tickPosition = spec.start;
+    takeState = "requesting";
+    takeNotice = "";
+    const generation = ++takeRequestGeneration;
+    renderTakePanel();
+    try {
+      await ensureMicrophoneInput();
+      if (generation !== takeRequestGeneration) { syncMicrophoneActivity(); return; }
+      const buffer = takeSession?.key === spec.key && takeBuffer?.sampleRate === pitchCaptureContext.sampleRate
+        ? takeBuffer : new window.MeleteRecording.TakeBuffer(pitchCaptureContext.sampleRate, spec.seconds);
+      const capture = await window.MeleteRecording.PcmCapture.create(pitchCaptureContext, pitchCaptureSource,
+        (frame, samples) => buffer.append(frame, samples),
+        error => { void stopTakeRecording(error.message, true); });
+      if (generation !== takeRequestGeneration) { await capture.stop(); syncMicrophoneActivity(); return; }
+      takeBuffer = buffer;
+      takeSession = spec;
+      takeCapture = capture;
+      takeState = "armed";
+      takeRefreshTimer = window.setInterval(renderTakePanel, 250);
+      renderTakePanel();
+      await engine.startTransport();
+      if (generation === takeRequestGeneration && !engine.playing && !engine.starting) {
+        await stopTakeRecording("Playback could not start", true);
+      }
+    } catch (error) {
+      if (generation !== takeRequestGeneration) return;
+      await stopTakeRecording(error?.name === "NotAllowedError" ? "Microphone access was blocked" : "Recording could not start", true);
+      showToast(takeNotice, "error");
+    }
+  }
+
+  function stopTakeRecording(message = "Stopped", pausePlayback = false) {
+    if (takeState === "off") return Promise.resolve();
+    if (takeState === "stopping") return takeStopPromise || Promise.resolve();
+    ++takeRequestGeneration;
+    takeState = "stopping";
+    takeNotice = message;
+    takeBuffer?.finish((pitchCaptureContext?.currentTime || 0) * (pitchCaptureContext?.sampleRate || 1));
+    const capture = takeCapture;
+    takeCapture = null;
+    window.clearInterval(takeRefreshTimer);
+    takeRefreshTimer = 0;
+    if (pausePlayback) engine?.pauseTransport();
+    renderTakePanel();
+    takeStopPromise = (async () => {
+      try { await capture?.stop(); }
+      finally {
+        takeState = "off";
+        takeStopPromise = null;
+        if (takeBuffer) takeBuffer.lastChunk = null;
+        syncMicrophoneActivity();
+        renderTakePanel();
+      }
+    })();
+    return takeStopPromise;
+  }
+
+  async function clearTakes() {
+    await stopTakeRecording("Takes cleared", true);
+    stopTakePreview();
+    takeBuffer = null;
+    takeSession = null;
+    takeNotice = "Takes cleared";
+    renderTakePanel();
+  }
+
+  function takeTransportChanged(kind) {
+    if (kind === "play") stopTakePreview();
+    if ((kind === "play" && takeState === "armed") || (kind === "loop" && takeState === "recording")) {
+      takeBuffer.begin(Math.round(pitchCaptureContext.currentTime * pitchCaptureContext.sampleRate));
+      takeState = "recording";
+      renderTakePanel();
+    } else if (!["play", "loop"].includes(kind) && takeState !== "off" && takeState !== "stopping") {
+      void stopTakeRecording(kind === "pause" ? "Stopped" : "Stopped: playback changed", kind !== "pause");
+    }
   }
 
   function restoreScoreRenderStyleLock() {
@@ -7699,8 +7943,19 @@
   elements.barScore.addEventListener("touchcancel", finishScorePinch, { passive: false });
   window.addEventListener("blur", () => { cancelPitchAuditions(); cancelScoreScrub(); });
   window.addEventListener("pagehide", () => { cancelPitchAuditions(); cancelScoreScrub(); });
+  window.addEventListener("pagehide", () => {
+    void stopTakeRecording("Stopped", true);
+    disablePitchCapture(false);
+    stopTakePreview();
+  });
+  window.addEventListener("beforeunload", event => {
+    if (!takeBuffer?.takes.some(take => take.written > 0) && takeState === "off") return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   elements.playbackReturn.addEventListener("click", () => scrollToPlayback(playbackDirection(), "smooth", false));
   elements.practicePart.addEventListener("input", () => {
+    void stopTakeRecording("Stopped: practice part changed", true);
     setPracticePart(practicePartPager?.value());
     updateNoteActionLabel();
     if (scoreView === "bars") scheduleBarRender();
@@ -7731,8 +7986,17 @@
     event.preventDefault();
   });
   attachHoldReset(elements.pitchCapture, togglePitchCapture, clearPitchTrace, "pitch trace");
+  attachHoldReset(elements.loopRecorder, () => showTakePanel(elements.takePanel.hidden), () => { void clearTakes(); }, "loop recordings");
+  attachHoldReset(elements.recordTake, () => { void startTakeRecording(); }, () => { void clearTakes(); }, "loop recordings");
+  elements.closeTakes.addEventListener("click", () => showTakePanel(false));
+  document.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || elements.takePanel.hidden) return;
+    event.preventDefault();
+    showTakePanel(false);
+  });
   elements.tempo.addEventListener("input", () => {
     if (api) api.playbackSpeed = tempoControl.value() / 100;
+    renderTakePanel();
     savePreferences();
   });
   elements.metronome.addEventListener("input", () => {
@@ -7746,6 +8010,11 @@
   elements.playPause.addEventListener("click", () => engine?.toggleTransport());
   document.addEventListener("melete:restore-position", event => restorePlaybackPosition(event.detail?.milliseconds));
   document.addEventListener("melete:activate", () => { if (ready) initializeMediaSession(); });
+  document.addEventListener("melete:deactivate", () => {
+    void stopTakeRecording("Stopped: song changed", true);
+    disablePitchCapture(false);
+    stopTakePreview();
+  });
   elements.seek.addEventListener("pointerdown", (event) => {
     seeking = true;
     scrubLabelPointer = event.pointerType === "mouse" ? null : event.pointerId;
@@ -7793,6 +8062,7 @@
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") { cancelPitchAuditions(); cancelScoreScrub(); }
+    if (document.visibilityState !== "visible") void stopTakeRecording("Stopped: tab hidden", true);
     if (document.visibilityState !== "visible" || !pitchCaptureEnabled() || !pitchCaptureStream) return;
     const track = pitchCaptureStream.getAudioTracks()[0];
     if (!track || track.readyState !== "live") return;
@@ -7836,13 +8106,19 @@
     if (event.code !== "Space" || isTextEntryTarget(event.target)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (!event.repeat) engine?.toggleTransport();
+    if (!event.repeat) {
+      if (!elements.takePanel.hidden && takePreviewUrl) {
+        if (elements.takePreview.paused) void elements.takePreview.play().catch(() => {});
+        else elements.takePreview.pause();
+      } else engine?.toggleTransport();
+    }
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }, { capture: true });
 
   document.addEventListener("keydown", (event) => {
     const target = event.target;
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable
+      || target?.closest?.("audio, video")) return;
     if (event.defaultPrevented) return;
     if (event.key.startsWith("Arrow") && target instanceof Element
       && target.closest("button, select, [role='spinbutton'], [role='slider'], [role='tab']")) return;
@@ -8175,6 +8451,7 @@
       api.customCursorHandler = createLeftEdgeCursorHandler(window.alphaTab, api);
       engine = new GuideEngine(sequence);
       engine.onPreparationChanged = syncPlaybackButton;
+      engine.onTransportChange = takeTransportChanged;
       buildTimelineSegments();
       engine.attach(api);
       engine.setMetronome(metronomeControl.value());
@@ -8255,6 +8532,7 @@
         }));
         initializeMediaSession();
         updatePitchCaptureAppearance();
+        renderTakePanel();
         if (scoreView === "bars") scheduleBarRender();
       });
       api.playerStateChanged.on((event) => {

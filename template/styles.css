@@ -508,6 +508,51 @@ button { color: inherit; }
 .tools-group [hidden] { display: none; }
 .practice-file svg { width: 12px; height: 14px; flex-shrink: 0; }
 
+#loopRecorder.is-recording { color: #ed5555; border-color: currentColor; }
+#loopRecorder.has-takes:not(.is-recording) { border-color: var(--accent); }
+.take-panel {
+  position: fixed;
+  z-index: 780;
+  right: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(390px, calc(100vw - 24px));
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  box-shadow: 0 8px 24px #0003;
+  font-size: 13px;
+}
+.take-panel[hidden] { display: none; }
+.take-panel-head, .take-panel-transport { display: flex; align-items: center; gap: 10px; }
+.take-panel-head { justify-content: space-between; }
+.take-panel-head strong { font-size: 15px; }
+.take-scope { color: var(--muted); font-size: 11px; margin: 3px 0 10px; }
+.take-record {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 36px; min-width: 118px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 5px;
+  color: inherit; background: var(--panel-solid); font: inherit; cursor: pointer;
+}
+.take-record svg { width: 15px; height: 15px; fill: #df4848; flex: 0 0 auto; }
+.take-record rect, .take-record.is-recording circle { display: none; }
+.take-record.is-recording rect { display: block; }
+.take-record:disabled, .take-row button:disabled { opacity: 0.45; cursor: default; }
+#takeStatus { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.take-list { margin-top: 10px; }
+.take-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px;
+  align-items: center; gap: 6px; min-height: 43px;
+  border-top: 1px solid var(--line);
+}
+.take-row .icon-button { width: 36px; height: 36px; }
+.take-row-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.take-row-label small { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+#takePreview { width: 100%; height: 36px; margin-top: 8px; }
+
 .mixer {
   --part-count: 4;
   display: grid;
@@ -803,7 +848,8 @@ button { color: inherit; }
 .binary-icon-button[aria-pressed="true"] { border-color: var(--accent-bright); background: var(--selection-highlight); color: var(--accent-bright); }
 .binary-icon-button.is-recording svg { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent-bright) 68%, transparent)); }
 
-.settings-toggle.has-active-microphone::after {
+.settings-toggle.has-active-microphone::after,
+.settings-toggle.has-recording::after {
   width: 6px;
   height: 6px;
   position: absolute;
@@ -814,6 +860,7 @@ button { color: inherit; }
   background: var(--accent-bright);
   content: "";
 }
+.settings-toggle.has-recording::after { background: #ed5555; }
 
 .metronome-label { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; }
 .metronome-label svg {
@@ -1780,7 +1827,7 @@ textarea:focus-visible {
   .practice-group { max-width: 100%; }
   .display-group { max-width: 100%; }
   .tools-group {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-template-rows: repeat(2, var(--toolbar-row-height));
   }
   .score-shell { padding: 5px 3px 36px; }
@@ -1824,6 +1871,7 @@ textarea:focus-visible {
   .toast,
   .settings-tooltip,
   .part-chooser,
+  .take-panel,
   .scrub-label,
   .skip-link { display: none !important; }
   body { background: white; color: black; }

@@ -91,6 +91,8 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("annotations: currentAnnotationState()", app)
         portable_snapshot = app.split("function currentPortableState()", 1)[1].split("function jsonForEmbeddedScript", 1)[0]
         self.assertNotIn("pitchTrace", portable_snapshot)
+        self.assertNotIn("takeBuffer", portable_snapshot)
+        self.assertNotIn("takeSession", portable_snapshot)
         self.assertIn("function documentWithPortableState(source, state)", app)
         self.assertIn('.replace(/</gu, "\\\\u003c")', app)
         self.assertIn("initialDocumentSource", app)
@@ -1317,7 +1319,8 @@ console.log(JSON.stringify(sweepSupersededStorage("autumn")));
         self.assertLess(app.index("engine = new GuideEngine(sequence);"),
                         app.index("if (wantsPitchCapture && !window.frameElement?.inert) void startPitchCapture({ quiet: true });"))
         self.assertIn("async function startPitchCapture({ quiet = false } = {}) {", app)
-        self.assertEqual(app.count("if (!quiet) showToast("), 3)
+        # New and cached microphone acquisition share the same error path.
+        self.assertEqual(app.count("if (!quiet) showToast("), 2)
         # Turning it on or off writes it; the appearance pass would also fire
         # mid-request, when the answer is not known yet.
         self.assertIn("""    updatePitchCaptureAppearance();
@@ -2364,7 +2367,9 @@ console.log(JSON.stringify({{
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")
         self.assertIn('event.code !== "Space" || isTextEntryTarget(event.target)', app)
         self.assertIn("event.stopImmediatePropagation()", app)
-        self.assertIn("if (!event.repeat) engine?.toggleTransport()", app)
+        self.assertIn("if (!event.repeat) {", app)
+        self.assertIn("} else engine?.toggleTransport();", app)
+        self.assertIn("!elements.takePanel.hidden && takePreviewUrl", app)
         self.assertIn('elements.playPause.addEventListener("click", () => engine?.toggleTransport())', app)
         self.assertIn('navigator.mediaSession.setActionHandler("play", () => { void engine?.startTransport(); })', app)
         self.assertIn('elements.playPause.setAttribute("aria-busy", String(preparing))', app)

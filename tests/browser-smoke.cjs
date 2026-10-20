@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const {pathToFileURL} = require('node:url');
 const {execFileSync} = require('node:child_process');
 const {chromium} = require(process.env.GUI_QA_NODE_MODULES
   ? path.join(process.env.GUI_QA_NODE_MODULES, 'playwright') : 'playwright');
@@ -12,6 +13,8 @@ const {checkPanHolds} = require('./browser-pan-hold.cjs');
 const {checkFirstVisit, checkTouchVolumeTip, checkPartLinks, checkTouchRows, checkScrubLabel} = require('./browser-onboarding.cjs');
 const {pitchbarProbe, checkPitchbarSpacing} = require('./browser-pitchbar-spacing.cjs');
 const {checkLoopLinks} = require('./browser-loop-links.cjs');
+const {recordingProbe, checkLoopRecorder} = require('./browser-loop-recorder.cjs');
+const {wavBytes} = require('../template/loop_recorder.js');
 
 async function main() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'melete-shared-smoke-'));
@@ -25,7 +28,12 @@ async function main() {
     const marker = 'engine = new GuideEngine(sequence);';
     assert.equal(html.split(marker).length, 2);
     html = html.replace(marker, marker + `
-      window.__qa = {engine, api, onsets: [], ${pitchbarProbe}, get busy() { return notationRenderInFlight || notationRenderQueued; }};
+      window.__qa = {engine, api, onsets: [], ${pitchbarProbe}, ${recordingProbe} get busy() { return notationRenderInFlight || notationRenderQueued; }};
+      const captureCreate = window.MeleteRecording.PcmCapture.create;
+      window.MeleteRecording.PcmCapture.create = async function(...args) {
+        try { return await captureCreate.apply(this, args); }
+        catch (error) { __qa.captureError = String(error); throw error; }
+      };
       const scheduleNote = engine.scheduleNote;
       engine.scheduleNote = function(note, ...args) {
         const before = this.scheduled.size;
@@ -34,13 +42,19 @@ async function main() {
         return result;
       };
     `);
-    browser = await chromium.launch({channel: process.env.QA_BROWSER_CHANNEL || undefined, headless: true});
-    const origin = 'http://127.0.0.1:8809/shared-regression-fixture';
+    const fakeMic = path.join(temporary, 'synthetic-microphone.wav');
+    const pcm = Int16Array.from({length: 48000 * 4}, (_, i) => Math.round(32767 * .15 * Math.sin(2 * Math.PI * 997 * i / 48000)));
+    await fs.writeFile(fakeMic, Buffer.from(wavBytes(pcm, 48000)));
+    browser = await chromium.launch({channel: process.env.QA_BROWSER_CHANNEL || undefined, headless: true,
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${fakeMic}`]});
+    const offlineFile = path.join(temporary, 'offline.html');
+    if (process.env.QA_FILE_ORIGIN) await fs.writeFile(offlineFile, html);
+    const origin = process.env.QA_FILE_ORIGIN ? pathToFileURL(offlineFile).href : 'http://127.0.0.1:8809/shared-regression-fixture';
     const output = path.resolve(__dirname, '../qa');
     await fs.mkdir(output, {recursive: true});
     for (const mobile of [false, true]) {
       const context = await browser.newContext({viewport: mobile ? {width:393,height:852} : {width:1440,height:900},
-        isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, colorScheme: 'dark'});
+        isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1, colorScheme: 'dark', permissions: ['microphone']});
       try {
         await context.route('**/*', route => {
           // A ?part= link asks for the same document.
@@ -53,6 +67,11 @@ async function main() {
           document.querySelector('#playPause:not(:disabled)') && document.querySelector('#score svg, #barScore svg'));
         await page.goto(origin);
         await settled();
+        if (process.env.QA_RECORDER_ONLY) {
+          results.push({viewport: mobile ? 'mobile' : 'desktop', loopRecorder:
+            await checkLoopRecorder(page, origin, settled, {mobile, output, temporary})});
+          continue;
+        }
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), mobile ? '70' : '100');
         assert.equal(await page.locator('#annotationLayout').getAttribute('aria-pressed'), String(mobile));
         const names = ['Soprano', 'Alto', 'Bass'];
@@ -176,15 +195,17 @@ async function main() {
         const touchRows = await checkTouchRows(page, page, {mobile});
         const partLinks = await checkPartLinks(page, origin, settled, {names});
         const loopLinks = await checkLoopLinks(page, origin, settled, {mobile, output});
+        const loopRecorder = await checkLoopRecorder(page, origin, settled, {mobile, output, temporary});
         results.push({viewport: mobile ? 'mobile' : 'desktop', visibilitySubsets: 7, onsetChecks: 4, savedScale: saved,
           fullMeasureRests: {scales:[5,400], count:restLayout.length}, cursorEdges, panHolds, pitchbarSpacing,
-          firstVisit, touchTip, scrubLabel, touchRows, partLinks, loopLinks});
+          firstVisit, touchTip, scrubLabel, touchRows, partLinks, loopLinks, loopRecorder});
       } finally { await context.close(); }
     }
     assert.deepEqual(errors, []);
     assert.deepEqual(requests, []);
     const report = {passed: true, freshGenericBuild: true, results, errors, externalRequests: requests};
-    await fs.writeFile(path.join(__dirname, '../qa/shared-smoke.json'), JSON.stringify(report, null, 2) + '\n');
+    const reportName = process.env.QA_FILE_ORIGIN ? 'recorder-file-smoke.json' : process.env.QA_RECORDER_ONLY ? 'recorder-smoke.json' : 'shared-smoke.json';
+    await fs.writeFile(path.join(__dirname, '../qa', reportName), JSON.stringify(report, null, 2) + '\n');
     console.log(JSON.stringify(report, null, 2));
   } finally {
     await browser?.close();

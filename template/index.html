@@ -225,6 +225,10 @@
             <button class="icon-button display-help" id="settingsHelp" type="button" aria-pressed="false" aria-label="Show setting help" title="Setting help">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
             </button>
+            <button class="icon-button" id="loopRecorder" type="button" aria-expanded="false" aria-controls="takePanel" aria-label="Loop recordings" title="Loop recordings; hold to clear takes" data-help="Microphone-only loop takes. Use headphones. Hold to clear.">
+              <!-- Lucide Circle Dot, ISC license: https://lucide.dev/icons/circle-dot -->
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="1"></circle></svg>
+            </button>
           </section>
         </div>
       </div>
@@ -265,6 +269,24 @@
       <p class="part-chooser-note" id="partChooserNote"></p>
     </aside>
     <div class="scrub-label" id="scrubLabel" aria-hidden="true" hidden></div>
+    <aside class="take-panel" id="takePanel" role="dialog" aria-modal="false" aria-labelledby="takeTitle" hidden>
+      <div class="take-panel-head">
+        <strong id="takeTitle">Loop takes</strong>
+        <button class="icon-button" id="closeTakes" type="button" aria-label="Close loop recordings" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <div class="take-scope">Microphone only · Last 3 passes · Unsaved</div>
+      <div class="take-panel-transport">
+        <button class="take-record" id="recordTake" type="button" title="Restart loop and record microphone; use headphones. Hold to clear takes.">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8"></circle><rect x="5" y="5" width="14" height="14" rx="1"></rect></svg>
+          <span>Record loop</span>
+        </button>
+        <span id="takeStatus" role="status" aria-live="polite">Set a loop to record</span>
+      </div>
+      <div class="take-list" id="takeList" aria-label="Recent microphone takes"></div>
+      <audio id="takePreview" controls preload="metadata" aria-label="Preview selected take" hidden></audio>
+    </aside>
     <script src="./app.js" data-inline></script>
     <!-- THIRD_PARTY_NOTICES -->
   </body>

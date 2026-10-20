@@ -130,6 +130,28 @@ the loop is saved per song, so reload preserves later edits or clearing instead
 of reapplying the original link. Clicking the existing Start/End controls still
 sets whole-measure boundaries; holding either clears the loop.
 
+## Record Loop Takes
+
+Set a practice loop, open **Tools > Loop recordings** (circle-dot icon), and
+press **Record loop**. Playback restarts at the loop start. Use headphones:
+the recording contains only the microphone, but speakers can bleed into it.
+Press **Stop**, preview the takes, and download your choice as a mono PCM WAV.
+There is no automatic "best take" ranking or submission/upload.
+
+The buffer holds three passes **including the active pass**; starting a fourth
+evicts the oldest. A stopped mid-pass take is labeled Partial. Seeking, changing
+the loop or speed, hiding the tab, switching songs, and audio interruptions stop
+recording without erasing retained takes. Sing and the recorder can use the same
+microphone independently. Hold the recorder control (or press Delete while it is
+focused) to clear takes.
+
+Takes exist only in this tab's memory. Download before reloading or closing;
+they are not included in preferences, saved offline HTML, or pitch-trace storage.
+Recording never starts from a URL or saved preference. Loops are limited to five
+minutes per pass to bound allocation. Capture uses an inline AudioWorklet, with
+no network dependencies, and requires a supported browser with microphone access
+(HTTPS or localhost recommended).
+
 ## Scope And Limits
 
 - This is the reusable shared pipeline, not a bundle of song arrangements or
@@ -565,6 +587,7 @@ choir-practice-builder/
     index.html
     styles.css
     app.js
+    loop_recorder.js
     shared_notation.js
     system_annotations.js
   vendor/alphatab/
