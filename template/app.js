@@ -147,8 +147,20 @@
   let takeState = "off";
   let takeRequestGeneration = 0;
   let takeCapture = null;
-  let takeBuffer = null;
-  let takeSession = null;
+  let takeJournal = null;
+  const takeStore = new window.MeleteRecording.TakeStore();
+  let takeLibrary = new Map();
+  let takeLibraryRequest = null;
+  let takeLibraryReady = false;
+  let takePersistence = false;
+  let takePersistenceRequested = false;
+  let takeChannel = null;
+  let takeFavoritesOnly = false;
+  let takeVisibleCount = 25;
+  let takeActionBusy = false;
+  let takeDeleteIds = [];
+  let takePreviewId = null;
+  let takePreviewGeneration = 0;
   let takeRefreshTimer = 0;
   let takePreviewUrl = null;
   let takeStopPromise = null;
@@ -240,8 +252,16 @@
     closeTakes: document.getElementById("closeTakes"),
     recordTake: document.getElementById("recordTake"),
     takeStatus: document.getElementById("takeStatus"),
+    takeStorage: document.getElementById("takeStorage"),
     takeList: document.getElementById("takeList"),
     takePreview: document.getElementById("takePreview"),
+    takeFavorites: document.getElementById("takeFavorites"),
+    takeMore: document.getElementById("takeMore"),
+    retryTakeSave: document.getElementById("retryTakeSave"),
+    takeDeletePrompt: document.getElementById("takeDeletePrompt"),
+    takeDeleteMessage: document.getElementById("takeDeleteMessage"),
+    confirmTakeDelete: document.getElementById("confirmTakeDelete"),
+    cancelTakeDelete: document.getElementById("cancelTakeDelete"),
   };
 
   function clamp(value, minimum, maximum) {
@@ -7041,11 +7061,59 @@
     if (!Number.isFinite(seconds) || seconds <= 0) return null;
     const label = `${elements.loopStart.textContent.trim()}-${elements.loopEnd.textContent.trim()}`;
     const part = parts[practicePartIndex]?.short || parts[practicePartIndex]?.name || "voice";
-    return {seconds, label, part, rate: engine.rate, start: range.start,
-      key: JSON.stringify([range.start, range.end, engine.rate, part])};
+    return {seconds, label, part, rate: engine.rate, start: range.start, end: range.end};
+  }
+
+  function takeSongKey() { return String(config.slug || config.title || "melete"); }
+
+  function allTakes() {
+    const merged = new Map([...takeLibrary].map(([id, record]) => [id, {...record,
+      length: record.frames, seconds: record.frames / record.sampleRate, active: false, unsaved: false}]));
+    for (const record of takeJournal?.views() || []) merged.set(record.id, record);
+    return [...merged.values()].sort((a, b) => b.createdAt - a.createdAt || (b.number || 0) - (a.number || 0));
+  }
+
+  function announceTakeChange() { takeChannel?.postMessage({song: takeSongKey()}); }
+
+  async function loadTakeLibrary() {
+    if (takeLibraryRequest) return takeLibraryRequest;
+    takeLibraryRequest = (async () => {
+      const records = await takeStore.list(takeSongKey());
+      takeLibrary = new Map(records.map(record => [record.id, record]));
+      takeLibraryReady = true;
+      try { takePersistence = await navigator.storage?.persisted?.() || false; } catch {}
+      if (!takeChannel && typeof BroadcastChannel !== "undefined") {
+        try {
+          takeChannel = new BroadcastChannel("melete-audio-takes-v1");
+          takeChannel.onmessage = event => {
+            if (event.data?.song === takeSongKey()) void loadTakeLibrary().catch(() => {});
+          };
+        } catch {} // Cross-tab refresh is optional; local saving is not.
+      }
+    })().catch(error => { takeLibraryReady = false; throw error; })
+      .finally(() => { takeLibraryRequest = null; renderTakePanel(); });
+    return takeLibraryRequest;
+  }
+
+  function takeSaveError(error) {
+    return error?.name === "QuotaExceededError"
+      ? "Storage full. Unsaved audio is still available to download."
+      : "Local save failed. Unsaved audio is still available to download.";
+  }
+
+  async function checkTakeSpace(spec) {
+    let estimate;
+    try { estimate = await navigator.storage?.estimate?.(); } catch {}
+    const required = spec.seconds * (pitchCaptureContext?.sampleRate || 48000) * 4 + 262144;
+    if (Number.isFinite(estimate?.quota) && Number.isFinite(estimate?.usage)
+      && estimate.quota - estimate.usage < required) {
+      throw new DOMException("Not enough local space for another take", "QuotaExceededError");
+    }
   }
 
   function stopTakePreview() {
+    takePreviewGeneration += 1;
+    takePreviewId = null;
     elements.takePreview.pause();
     elements.takePreview.removeAttribute("src");
     elements.takePreview.load();
@@ -7054,86 +7122,165 @@
     takePreviewUrl = null;
   }
 
-  function takeBlob(take) {
-    return new Blob([window.MeleteRecording.wavBytes(takeBuffer.samples(take), takeBuffer.sampleRate)], {type: "audio/wav"});
+  async function takeBlob(take) {
+    return takeJournal?.wav(take.id) || await takeStore.wav(take.id);
   }
 
   async function previewTake(id) {
     if (takeState !== "off") return;
-    const take = takeBuffer?.takes.find(item => item.id === id);
-    if (!take || !takeBuffer.info(take).length) return;
+    const take = allTakes().find(item => item.id === id);
+    if (!take?.length) return;
     engine?.pauseTransport();
     stopTakePreview();
-    takePreviewUrl = URL.createObjectURL(takeBlob(take));
-    elements.takePreview.src = takePreviewUrl;
-    elements.takePreview.hidden = false;
-    elements.takePreview.setAttribute("aria-label", `Preview take ${take.id}`);
-    try { await elements.takePreview.play(); }
+    const generation = takePreviewGeneration;
+    try {
+      const blob = await takeBlob(take);
+      if (generation !== takePreviewGeneration || takeState !== "off") return;
+      takePreviewId = id;
+      takePreviewUrl = URL.createObjectURL(blob);
+      elements.takePreview.src = takePreviewUrl;
+      elements.takePreview.hidden = false;
+      elements.takePreview.setAttribute("aria-label", `Preview take ${take.number || "unsaved"}`);
+      await elements.takePreview.play();
+    }
     catch (error) {
-      if (error?.name !== "AbortError" && takePreviewUrl) showToast("Press play in the take preview", "error");
+      if (error?.name !== "AbortError" && generation === takePreviewGeneration) showToast("Could not open the take preview", "error");
     }
   }
 
-  function downloadTake(id) {
+  async function downloadTake(id) {
     if (takeState !== "off") return;
-    const take = takeBuffer?.takes.find(item => item.id === id);
-    if (!take || !takeBuffer.info(take).length) return;
+    const take = allTakes().find(item => item.id === id);
+    if (!take?.length) return;
     const safe = value => String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "");
-    const url = URL.createObjectURL(takeBlob(take));
-    const link = document.createElement("a");
-    const partial = takeBuffer.info(take).complete ? "" : "-partial";
-    link.href = url;
-    link.download = `${safe(config.slug || config.title)}-${safe(takeSession.part)}-m${safe(takeSession.label)}-${Math.round(takeSession.rate * 100)}pct-take-${take.id}${partial}.wav`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    try {
+      const url = URL.createObjectURL(await takeBlob(take));
+      const link = document.createElement("a");
+      const partial = take.complete ? "" : "-partial";
+      link.href = url;
+      link.download = `${safe(config.slug || config.title)}-${safe(take.part)}-m${safe(take.label)}-${Math.round(take.rate * 100)}pct-take-${take.number || take.createdAt}${partial}.wav`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch { showToast("Could not read the stored take", "error"); }
+  }
+
+  async function starTake(id) {
+    const record = allTakes().find(item => item.id === id);
+    if (!record?.number || takeActionBusy) return;
+    takeActionBusy = true;
+    renderTakePanel();
+    try {
+      const saved = await takeStore.favorite(id, !record.favorite);
+      takeLibrary.set(id, saved);
+      for (const entry of takeJournal?.entries.values() || []) {
+        if (entry.record.id === id) entry.record.favorite = saved.favorite;
+      }
+      announceTakeChange();
+    } catch { showToast("Could not save the favorite", "error"); }
+    finally { takeActionBusy = false; renderTakePanel(); }
+  }
+
+  async function deleteTakes(ids) {
+    if (takeState !== "off" || takeActionBusy) return;
+    takeActionBusy = true;
+    renderTakePanel();
+    try {
+      const deleted = await takeStore.deleteUnstarred(takeSongKey(), ids);
+      takeJournal?.drop(deleted);
+      deleted.forEach(id => takeLibrary.delete(id));
+      if (deleted.includes(takePreviewId)) stopTakePreview();
+      if (!takeJournal?.entries.size) takeJournal = null;
+      takeNotice = `${deleted.length} unstarred take${deleted.length === 1 ? "" : "s"} deleted`;
+      announceTakeChange();
+    } catch { showToast("Could not delete takes; recordings were kept", "error"); }
+    finally { takeActionBusy = false; renderTakePanel(); }
+  }
+
+  async function retryTakeSave() {
+    if (takeState !== "off" || takeActionBusy || !takeJournal) return;
+    takeActionBusy = true;
+    renderTakePanel();
+    try {
+      await takeJournal.retry();
+      takeNotice = takeJournal.failed ? takeSaveError(takeJournal.failed) : "All takes saved locally";
+    } finally { takeActionBusy = false; renderTakePanel(); }
   }
 
   function renderTakePanel() {
     const spec = recordingLoopSpec();
     const active = takeState !== "off";
+    const all = allTakes();
+    const pending = Boolean(takeJournal?.entries.size);
     elements.loopRecorder.classList.toggle("is-recording", active);
     elements.settingsToggle.classList.toggle("has-recording", active);
     elements.settingsToggle.title = active ? "Settings; loop recording active" : "Settings";
-    elements.loopRecorder.classList.toggle("has-takes", Boolean(takeBuffer?.takes.length));
+    elements.loopRecorder.classList.toggle("has-takes", all.length > 0);
     elements.loopRecorder.setAttribute("aria-label", active ? "Recording loop takes" : "Loop recordings");
     elements.recordTake.classList.toggle("is-recording", active);
     elements.recordTake.querySelector("span").textContent = active ? (takeState === "requesting" ? "Cancel" : "Stop") : "Record loop";
-    elements.recordTake.disabled = takeState === "stopping" || (!active && (!spec || spec.seconds > window.MeleteRecording.MAX_LOOP_SECONDS));
+    elements.recordTake.disabled = takeActionBusy || takeState === "stopping"
+      || (!active && (pending || !spec || spec.seconds > window.MeleteRecording.MAX_LOOP_SECONDS));
     let status = takeNotice || (spec ? `${spec.label} · ${formatTime(spec.seconds * 1000)} per pass` : "Set a loop to record");
     if (spec?.seconds > window.MeleteRecording.MAX_LOOP_SECONDS) status = "Choose a loop of 5 minutes or less";
-    if (takeState === "requesting") status = "Opening microphone...";
+    if (takeState === "requesting") status = "Preparing recording...";
     if (takeState === "armed") status = "Starting loop...";
-    if (takeState === "recording") status = `Recording take ${takeBuffer?.current?.id || ""}`;
-    if (takeState === "stopping") status = "Finishing take...";
+    if (takeState === "recording") status = `Recording take ${all.find(take => take.active)?.number || "..."}`;
+    if (takeState === "stopping") status = "Saving take...";
     if (elements.takeStatus.textContent !== status) elements.takeStatus.textContent = status;
-    const takes = [...(takeBuffer?.takes || [])].reverse();
+    const bytes = all.reduce((total, take) => total + take.length * 2, 0);
+    elements.takeStorage.textContent = takeLibraryReady
+      ? `${all.length} take${all.length === 1 ? "" : "s"} · ${(bytes / 1048576).toFixed(1)} MB · ${takePersistence ? "Persistent storage" : "This browser"}`
+      : "Local storage not loaded";
+    elements.takeStorage.title = "Recordings stay on this device. Browser data can be cleared; download important takes.";
+    elements.takeFavorites.setAttribute("aria-pressed", String(takeFavoritesOnly));
+    elements.retryTakeSave.hidden = active || !pending;
+    elements.retryTakeSave.disabled = takeActionBusy;
+    const filtered = takeFavoritesOnly ? all.filter(take => take.favorite) : all;
+    const takes = filtered.slice(0, takeVisibleCount);
+    elements.takeMore.hidden = takes.length === filtered.length;
+    elements.takeMore.textContent = `Show more (${takes.length}/${filtered.length})`;
     const key = takes.map(take => take.id).join(",");
     if (elements.takeList.dataset.ids !== key) {
       elements.takeList.dataset.ids = key;
       elements.takeList.replaceChildren(...takes.map(take => {
         const row = document.createElement("div");
         row.className = "take-row";
-        row.dataset.takeId = String(take.id);
-        // Lucide Play and Download, ISC license. Only generated IDs enter markup.
-        row.innerHTML = `<div class="take-row-label"><span>Take ${take.id}</span><small></small></div>
-          <button class="icon-button" type="button" aria-label="Listen to take ${take.id}" title="Listen to take ${take.id}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 14 9-14 9z"></path></svg></button>
-          <button class="icon-button" type="button" aria-label="Download take ${take.id} as WAV" title="Download take ${take.id} as WAV"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg></button>`;
-        const [preview, download] = row.querySelectorAll("button");
+        row.dataset.takeId = take.id;
+        // Lucide Star, Play, Download and Trash 2, ISC license.
+        row.innerHTML = `<button class="icon-button take-star" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg></button>
+          <div class="take-row-label"><span></span><small></small><small class="take-detail"></small></div>
+          <button class="icon-button take-listen" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 14 9-14 9z"></path></svg></button>
+          <button class="icon-button take-download" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg></button>
+          <button class="icon-button take-delete" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M19 6v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6M8 6V3h8v3M10 10v7M14 10v7"></path></svg></button>`;
+        const [star, preview, download, remove] = row.querySelectorAll("button");
+        star.addEventListener("click", () => { void starTake(take.id); });
         preview.addEventListener("click", () => { void previewTake(take.id); });
-        download.addEventListener("click", () => downloadTake(take.id));
+        download.addEventListener("click", () => { void downloadTake(take.id); });
+        remove.addEventListener("click", () => { void deleteTakes([take.id]); });
         return row;
       }));
     }
     takes.forEach(take => {
-      const info = takeBuffer.info(take);
       const row = elements.takeList.querySelector(`[data-take-id="${take.id}"]`);
-      const state = info.active ? "In progress" : info.complete ? "Complete" : "Partial";
-      const warning = info.gap ? " · Audio gap" : info.peak >= 0.999 ? " · Clipping" : info.peak < 0.001 && info.seconds > 1 ? " · Very quiet" : "";
-      const duration = info.seconds < 1 ? `${info.seconds.toFixed(1)}s` : formatTime(info.seconds * 1000);
+      const name = `take ${take.number || "unsaved"}`;
+      row.querySelector(".take-row-label span").textContent = `Take ${take.number || "..."} · ${take.part} · ${take.label}`;
+      const state = take.active ? "Recording" : take.unsaved ? "Unsaved" : take.complete ? "Complete" : "Partial";
+      const warning = take.gap ? " · Audio gap" : take.peak >= 0.999 ? " · Clipping" : take.peak < 0.001 && take.seconds > 1 ? " · Very quiet" : "";
+      const duration = take.seconds < 1 ? `${take.seconds.toFixed(1)}s` : formatTime(take.seconds * 1000);
       row.querySelector("small").textContent = `${duration} · ${state}${warning}`;
-      row.querySelectorAll("button").forEach(button => { button.disabled = active || info.length === 0; });
+      row.querySelector(".take-detail").textContent = `${new Date(take.createdAt).toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"})} · ${Math.round(take.rate * 100)}%`;
+      const [star, preview, download, remove] = row.querySelectorAll("button");
+      star.setAttribute("aria-pressed", String(take.favorite));
+      for (const [button, label] of [[star, `Favorite ${name}`], [preview, `Listen to ${name}`],
+        [download, `Download ${name} as WAV`], [remove, `Delete ${name}`]]) {
+        button.setAttribute("aria-label", label);
+        button.title = button === remove && take.favorite ? "Unstar this take to delete it" : label;
+      }
+      star.disabled = takeActionBusy || !take.number;
+      preview.disabled = download.disabled = active || takeActionBusy || !take.length;
+      remove.disabled = active || takeActionBusy || take.favorite;
     });
   }
 
@@ -7144,6 +7291,10 @@
       hidePartChooser();
       if (isMobileSettingsDevice()) setSettingsOpen(false);
       renderTakePanel();
+      void loadTakeLibrary().catch(() => {
+        takeNotice = "Local storage unavailable. Enable site storage to record.";
+        renderTakePanel();
+      });
       elements.recordTake.focus();
     } else {
       stopTakePreview();
@@ -7153,6 +7304,7 @@
 
   async function startTakeRecording() {
     if (takeState !== "off") { await stopTakeRecording("Stopped", true); return; }
+    if (takeActionBusy || takeJournal?.entries.size) return;
     const spec = recordingLoopSpec();
     if (!spec || spec.seconds > window.MeleteRecording.MAX_LOOP_SECONDS) { renderTakePanel(); return; }
     if (!pitchCaptureSupported()) { showToast("Microphone recording is unavailable here", "error"); return; }
@@ -7164,27 +7316,46 @@
     const generation = ++takeRequestGeneration;
     renderTakePanel();
     try {
+      await loadTakeLibrary();
+      await checkTakeSpace(spec);
+      if (generation !== takeRequestGeneration) return;
       await ensureMicrophoneInput();
       if (generation !== takeRequestGeneration) { syncMicrophoneActivity(); return; }
-      const buffer = takeSession?.key === spec.key && takeBuffer?.sampleRate === pitchCaptureContext.sampleRate
-        ? takeBuffer : new window.MeleteRecording.TakeBuffer(pitchCaptureContext.sampleRate, spec.seconds);
+      const journal = new window.MeleteRecording.TakeJournal(takeStore, takeSongKey(), spec, pitchCaptureContext.sampleRate, {
+        onSaved: record => {
+          takeLibrary.set(record.id, record);
+          announceTakeChange();
+          renderTakePanel();
+        },
+        onError: error => {
+          if (takeJournal !== journal) return;
+          void stopTakeRecording(takeSaveError(error), true);
+          showTakePanel();
+        },
+      });
       const capture = await window.MeleteRecording.PcmCapture.create(pitchCaptureContext, pitchCaptureSource,
-        (frame, samples) => buffer.append(frame, samples),
+        (frame, samples) => journal.append(frame, samples),
         error => { void stopTakeRecording(error.message, true); });
       if (generation !== takeRequestGeneration) { await capture.stop(); syncMicrophoneActivity(); return; }
-      takeBuffer = buffer;
-      takeSession = spec;
+      takeJournal = journal;
       takeCapture = capture;
       takeState = "armed";
       takeRefreshTimer = window.setInterval(renderTakePanel, 250);
       renderTakePanel();
       await engine.startTransport();
+      if (!takePersistenceRequested && generation === takeRequestGeneration) {
+        takePersistenceRequested = true;
+        void navigator.storage?.persist?.().then(granted => { takePersistence = granted; renderTakePanel(); }).catch(() => {});
+      }
       if (generation === takeRequestGeneration && !engine.playing && !engine.starting) {
         await stopTakeRecording("Playback could not start", true);
       }
     } catch (error) {
       if (generation !== takeRequestGeneration) return;
-      await stopTakeRecording(error?.name === "NotAllowedError" ? "Microphone access was blocked" : "Recording could not start", true);
+      const message = error?.name === "NotAllowedError" ? "Microphone access was blocked"
+        : error?.name === "QuotaExceededError" ? "Storage full. Delete unwanted takes before recording."
+          : !takeLibraryReady ? "Local storage unavailable. Enable site storage to record." : "Recording could not start";
+      await stopTakeRecording(message, true);
       showToast(takeNotice, "error");
     }
   }
@@ -7195,7 +7366,8 @@
     ++takeRequestGeneration;
     takeState = "stopping";
     takeNotice = message;
-    takeBuffer?.finish((pitchCaptureContext?.currentTime || 0) * (pitchCaptureContext?.sampleRate || 1));
+    const journal = takeJournal;
+    journal?.finish((pitchCaptureContext?.currentTime || 0) * (pitchCaptureContext?.sampleRate || 1));
     const capture = takeCapture;
     takeCapture = null;
     window.clearInterval(takeRefreshTimer);
@@ -7203,11 +7375,11 @@
     if (pausePlayback) engine?.pauseTransport();
     renderTakePanel();
     takeStopPromise = (async () => {
-      try { await capture?.stop(); }
+      try { await capture?.stop(); await journal?.flush(); }
       finally {
         takeState = "off";
         takeStopPromise = null;
-        if (takeBuffer) takeBuffer.lastChunk = null;
+        if (journal?.failed) takeNotice = takeSaveError(journal.failed);
         syncMicrophoneActivity();
         renderTakePanel();
       }
@@ -7216,19 +7388,22 @@
   }
 
   async function clearTakes() {
-    await stopTakeRecording("Takes cleared", true);
-    stopTakePreview();
-    takeBuffer = null;
-    takeSession = null;
-    takeNotice = "Takes cleared";
+    await stopTakeRecording("Stopped", true);
+    if (takeActionBusy) return;
+    takeDeleteIds = allTakes().filter(take => !take.favorite).map(take => take.id);
+    if (!takeDeleteIds.length) { takeNotice = "No unstarred takes to delete"; renderTakePanel(); return; }
+    showTakePanel();
+    elements.takeDeleteMessage.textContent = `Delete ${takeDeleteIds.length} unstarred take${takeDeleteIds.length === 1 ? "" : "s"}? Favorites are kept.`;
+    elements.takeDeletePrompt.hidden = false;
+    elements.cancelTakeDelete.focus();
     renderTakePanel();
   }
 
   function takeTransportChanged(kind) {
     if (kind === "play") stopTakePreview();
     if ((kind === "play" && takeState === "armed") || (kind === "loop" && takeState === "recording")) {
-      takeBuffer.begin(Math.round(pitchCaptureContext.currentTime * pitchCaptureContext.sampleRate));
       takeState = "recording";
+      takeJournal.begin(Math.round(pitchCaptureContext.currentTime * pitchCaptureContext.sampleRate));
       renderTakePanel();
     } else if (!["play", "loop"].includes(kind) && takeState !== "off" && takeState !== "stopping") {
       void stopTakeRecording(kind === "pause" ? "Stopped" : "Stopped: playback changed", kind !== "pause");
@@ -7949,7 +8124,7 @@
     stopTakePreview();
   });
   window.addEventListener("beforeunload", event => {
-    if (!takeBuffer?.takes.some(take => take.written > 0) && takeState === "off") return;
+    if (!takeJournal?.entries.size && takeState === "off") return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -7988,6 +8163,20 @@
   attachHoldReset(elements.pitchCapture, togglePitchCapture, clearPitchTrace, "pitch trace");
   attachHoldReset(elements.loopRecorder, () => showTakePanel(elements.takePanel.hidden), () => { void clearTakes(); }, "loop recordings");
   attachHoldReset(elements.recordTake, () => { void startTakeRecording(); }, () => { void clearTakes(); }, "loop recordings");
+  elements.takeFavorites.addEventListener("click", () => {
+    takeFavoritesOnly = !takeFavoritesOnly;
+    takeVisibleCount = 25;
+    renderTakePanel();
+  });
+  elements.takeMore.addEventListener("click", () => { takeVisibleCount += 25; renderTakePanel(); });
+  elements.retryTakeSave.addEventListener("click", () => { void retryTakeSave(); });
+  elements.cancelTakeDelete.addEventListener("click", () => { takeDeleteIds = []; elements.takeDeletePrompt.hidden = true; });
+  elements.confirmTakeDelete.addEventListener("click", () => {
+    const ids = takeDeleteIds;
+    takeDeleteIds = [];
+    elements.takeDeletePrompt.hidden = true;
+    void deleteTakes(ids);
+  });
   elements.closeTakes.addEventListener("click", () => showTakePanel(false));
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape" || elements.takePanel.hidden) return;
@@ -8009,7 +8198,10 @@
   attachHoldReset(elements.loopEnd, () => setLoopPoint("end"), clearLoop, "loop");
   elements.playPause.addEventListener("click", () => engine?.toggleTransport());
   document.addEventListener("melete:restore-position", event => restorePlaybackPosition(event.detail?.milliseconds));
-  document.addEventListener("melete:activate", () => { if (ready) initializeMediaSession(); });
+  document.addEventListener("melete:activate", () => {
+    if (ready) initializeMediaSession();
+    if (takeLibraryReady) void loadTakeLibrary().catch(() => {});
+  });
   document.addEventListener("melete:deactivate", () => {
     void stopTakeRecording("Stopped: song changed", true);
     disablePitchCapture(false);
@@ -8533,6 +8725,7 @@
         initializeMediaSession();
         updatePitchCaptureAppearance();
         renderTakePanel();
+        void loadTakeLibrary().catch(() => {});
         if (scoreView === "bars") scheduleBarRender();
       });
       api.playerStateChanged.on((event) => {

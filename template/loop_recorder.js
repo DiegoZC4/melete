@@ -1,4 +1,4 @@
-/* Microphone-only loop takes. No storage, network, or score-playback connection. */
+/* Microphone-only takes with device-local storage. No network or guide-audio input. */
 ((root, factory) => {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -21,8 +21,8 @@
 
     begin(frame) {
       this.finish(frame, true);
-      // The active pass occupies one of the three slots, never a fourth buffer.
-      if (this.takes.length === 3) this.takes.shift();
+      // Only working audio is bounded. Saved takes are released, never evicted.
+      if (this.takes.length >= 3) throw new Error("Local storage is not keeping up");
       const take = {id: this.nextId++, start: Math.round(frame), end: null,
         pcm: new Int16Array(this.passFrames), written: 0, gap: false, firstGap: null, completed: false, peak: 0};
       this.takes.push(take);
@@ -71,6 +71,240 @@
     }
 
     samples(take) { return take.pcm.subarray(0, this.info(take).length); }
+    release(take) { this.takes = this.takes.filter(item => item !== take); }
+  }
+
+  class TakeStore {
+    constructor(factory, name = "melete-audio-takes-v1") {
+      this.factory = factory;
+      this.name = name;
+      this.opening = null;
+    }
+
+    open() {
+      if (this.opening) return this.opening;
+      this.opening = new Promise((resolve, reject) => {
+        // Some restricted origins throw even when reading window.indexedDB.
+        // Storage failures must not prevent the practice player from starting.
+        const factory = this.factory === undefined ? globalThis.indexedDB : this.factory;
+        if (!factory) { reject(new Error("Local recording storage is unavailable")); return; }
+        const request = factory.open(this.name, 1);
+        let expired = false;
+        const timer = setTimeout(() => { expired = true; reject(new Error("Local storage did not open")); }, 5000);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          db.createObjectStore("takes", {keyPath: "id"}).createIndex("song", "song");
+          db.createObjectStore("chunks", {keyPath: ["takeId", "offset"]}).createIndex("takeId", "takeId");
+          db.createObjectStore("counters");
+        };
+        request.onsuccess = () => {
+          clearTimeout(timer);
+          const db = request.result;
+          if (expired) { db.close(); return; }
+          db.onversionchange = () => { db.close(); this.opening = null; };
+          resolve(db);
+        };
+        request.onerror = () => { clearTimeout(timer); reject(request.error); };
+        request.onblocked = () => { clearTimeout(timer); expired = true; reject(new Error("Close other recording tabs and retry")); };
+      }).catch(error => { this.opening = null; throw error; });
+      return this.opening;
+    }
+
+    async transaction(names, mode, action) {
+      const db = await this.open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(names, mode);
+        let result, failure;
+        const timer = setTimeout(() => {
+          failure = new Error("Local storage is not responding");
+          try { tx.abort(); } catch {}
+        }, 10000);
+        tx.oncomplete = () => { clearTimeout(timer); resolve(result); };
+        tx.onabort = () => { clearTimeout(timer); reject(failure || tx.error || new Error("Local save failed")); };
+        const fail = error => { failure = error; tx.abort(); };
+        try { action(tx, value => { result = value; }, fail); }
+        catch (error) { fail(error); }
+      });
+    }
+
+    list(song) {
+      return this.transaction(["takes"], "readonly", (tx, done) => {
+        tx.objectStore("takes").index("song").getAll(song).onsuccess = event => done(event.target.result);
+      });
+    }
+
+    append(record, offset, pcm, status) {
+      return this.transaction(["takes", "chunks", "counters"], "readwrite", (tx, done, fail) => {
+        const takes = tx.objectStore("takes");
+        takes.get(record.id).onsuccess = event => {
+          const previous = event.target.result;
+          if ((previous?.frames || 0) !== offset) { fail(new Error("The take changed in another tab")); return; }
+          const write = number => {
+            const next = {...record, ...previous, ...status, number, frames: offset + pcm.length, updatedAt: Date.now()};
+            if (pcm.length) tx.objectStore("chunks").add({takeId: record.id, offset, pcm});
+            takes.put(next);
+            done(next);
+          };
+          if (previous) write(previous.number);
+          else {
+            const counters = tx.objectStore("counters");
+            counters.get(record.song).onsuccess = counter => {
+              const number = (counter.target.result || 0) + 1;
+              counters.put(number, record.song);
+              write(number);
+            };
+          }
+        };
+      });
+    }
+
+    favorite(id, favorite) {
+      return this.transaction(["takes"], "readwrite", (tx, done, fail) => {
+        const takes = tx.objectStore("takes");
+        takes.get(id).onsuccess = event => {
+          const record = event.target.result;
+          if (!record) { fail(new Error("This take was deleted in another tab")); return; }
+          record.favorite = favorite;
+          takes.put(record);
+          done(record);
+        };
+      });
+    }
+
+    deleteUnstarred(song, ids) {
+      return this.transaction(["takes", "chunks"], "readwrite", (tx, done) => {
+        const takes = tx.objectStore("takes");
+        const deleted = [];
+        done(deleted);
+        for (const id of new Set(ids)) {
+          takes.get(id).onsuccess = event => {
+            const record = event.target.result;
+            if (record && (record.song !== song || record.favorite)) return;
+            deleted.push(id);
+            takes.delete(id);
+            tx.objectStore("chunks").index("takeId").openCursor(id).onsuccess = chunk => {
+              const cursor = chunk.target.result;
+              if (cursor) { cursor.delete(); cursor.continue(); }
+            };
+          };
+        }
+      });
+    }
+
+    async wav(id) {
+      return this.transaction(["takes", "chunks"], "readonly", (tx, done, fail) => {
+        tx.objectStore("takes").get(id).onsuccess = event => {
+          const record = event.target.result;
+          if (!record) { fail(new Error("This take is no longer stored")); return; }
+          const chunks = [], header = wavBytes(new Int16Array(0), record.sampleRate);
+          const view = new DataView(header);
+          view.setUint32(4, 36 + record.frames * 2, true);
+          view.setUint32(40, record.frames * 2, true);
+          let frames = 0;
+          tx.objectStore("chunks").index("takeId").openCursor(id).onsuccess = chunk => {
+            const cursor = chunk.target.result;
+            if (cursor) {
+              const {offset, pcm} = cursor.value;
+              if (offset !== frames) { fail(new Error("Stored recording is incomplete")); return; }
+              chunks.push(wavBytes(pcm, record.sampleRate).slice(44));
+              frames += pcm.length;
+              cursor.continue();
+            } else if (frames !== record.frames) fail(new Error("Stored recording is incomplete"));
+            else done(new Blob([header, ...chunks], {type: "audio/wav"}));
+          };
+        };
+      });
+    }
+  }
+
+  class TakeJournal {
+    constructor(store, song, spec, sampleRate, {onSaved = () => {}, onError = () => {}} = {}) {
+      this.store = store;
+      this.song = song;
+      this.spec = spec;
+      this.buffer = new TakeBuffer(sampleRate, spec.seconds);
+      this.entries = new Map();
+      this.onSaved = onSaved;
+      this.onError = onError;
+      this.failed = null;
+      this.closed = false;
+    }
+
+    fail(error) {
+      if (this.failed) return;
+      this.failed = error;
+      this.onError(error);
+    }
+
+    begin(frame) {
+      if (this.failed || this.closed) return;
+      try {
+        const take = this.buffer.begin(frame);
+        const record = {id: globalThis.crypto.randomUUID(), song: this.song, createdAt: Date.now(),
+          sampleRate: this.buffer.sampleRate, frames: 0, favorite: false, finalized: false,
+          complete: false, ...this.spec};
+        this.entries.set(take, {take, record, savedFrames: 0, saving: null});
+        this.pump();
+      } catch (error) { this.fail(error); }
+    }
+
+    append(frame, samples) { this.buffer.append(frame, samples); this.pump(); }
+    finish(frame) { this.buffer.finish(frame); this.closed = true; }
+
+    views() {
+      return [...this.entries.values()].map(({take, record, savedFrames, saving}) => {
+        const info = this.buffer.info(take);
+        return {...record, ...info, id: record.id, number: record.number,
+          frames: info.length, savedFrames, saving: Boolean(saving),
+          unsaved: info.length > savedFrames || (!info.active && !record.finalized)};
+      });
+    }
+
+    pump(force = false) {
+      if (this.failed) return;
+      for (const entry of this.entries.values()) {
+        if (entry.saving) continue;
+        const {take} = entry, info = this.buffer.info(take);
+        const finalized = take.end !== null && (take.written >= take.end - take.start || force);
+        if (!finalized && info.length - entry.savedFrames < this.buffer.sampleRate) continue;
+        if (!info.length && finalized) { this.entries.delete(take); this.buffer.release(take); continue; }
+        const end = info.length;
+        const pcm = take.pcm.slice(entry.savedFrames, end);
+        entry.saving = this.store.append(entry.record, entry.savedFrames, pcm,
+          {complete: finalized && info.complete, finalized, gap: info.gap, peak: info.peak})
+          .then(record => {
+            entry.record = record;
+            entry.savedFrames = end;
+            this.onSaved(record);
+            if (finalized) { this.entries.delete(take); this.buffer.release(take); }
+          }).catch(error => this.fail(error)).finally(() => {
+            entry.saving = null;
+            this.pump(force);
+          });
+      }
+    }
+
+    async flush() {
+      this.pump(true);
+      while ([...this.entries.values()].some(entry => entry.saving)) {
+        await Promise.all([...this.entries.values()].map(entry => entry.saving));
+        this.pump(true);
+      }
+      this.buffer.lastChunk = null;
+    }
+
+    async retry() { this.failed = null; await this.flush(); }
+
+    drop(ids) {
+      for (const [take, entry] of this.entries) {
+        if (ids.includes(entry.record.id)) { this.entries.delete(take); this.buffer.release(take); }
+      }
+    }
+
+    wav(id) {
+      const entry = [...this.entries.values()].find(item => item.record.id === id);
+      return entry ? new Blob([wavBytes(this.buffer.samples(entry.take), this.buffer.sampleRate)], {type: "audio/wav"}) : null;
+    }
   }
 
   function wavBytes(samples, sampleRate) {
@@ -194,5 +428,5 @@
     }
   }
 
-  return {TakeBuffer, wavBytes, PcmCapture, MAX_LOOP_SECONDS, WORKLET_SOURCE};
+  return {TakeBuffer, TakeStore, TakeJournal, wavBytes, PcmCapture, MAX_LOOP_SECONDS, WORKLET_SOURCE};
 });

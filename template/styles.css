@@ -529,7 +529,7 @@ button { color: inherit; }
 .take-panel[hidden] { display: none; }
 .take-panel-head, .take-panel-transport { display: flex; align-items: center; gap: 10px; }
 .take-panel-head { justify-content: space-between; }
-.take-panel-head strong { font-size: 15px; }
+.take-panel-head strong { font-size: 15px; flex: 1; }
 .take-scope { color: var(--muted); font-size: 11px; margin: 3px 0 10px; }
 .take-record {
   display: flex; align-items: center; justify-content: center; gap: 5px;
@@ -544,13 +544,22 @@ button { color: inherit; }
 #takeStatus { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .take-list { margin-top: 10px; }
 .take-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px;
-  align-items: center; gap: 6px; min-height: 43px;
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) repeat(3, 32px);
+  align-items: center; gap: 4px; min-height: 65px; padding: 5px 0;
   border-top: 1px solid var(--line);
 }
-.take-row .icon-button { width: 36px; height: 36px; }
+.take-row .icon-button { width: 32px; height: 36px; }
 .take-row-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.take-row-label span { overflow-wrap: anywhere; }
 .take-row-label small { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.take-star[aria-pressed="true"] { color: var(--accent-bright); }
+.take-star[aria-pressed="true"] svg { fill: currentColor; }
+.take-command { font: inherit; color: inherit; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 5px; min-height: 36px; padding: 5px 9px; cursor: pointer; }
+.take-command:disabled { opacity: .45; cursor: default; }
+.take-delete-prompt { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+.take-delete-prompt span { flex: 0 0 100%; }
+.take-delete-prompt[hidden], .take-command[hidden] { display: none; }
+#retryTakeSave, #takeMore { margin-top: 8px; }
 #takePreview { width: 100%; height: 36px; margin-top: 8px; }
 
 .mixer {

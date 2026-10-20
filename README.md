@@ -138,19 +138,43 @@ the recording contains only the microphone, but speakers can bleed into it.
 Press **Stop**, preview the takes, and download your choice as a mono PCM WAV.
 There is no automatic "best take" ranking or submission/upload.
 
-The buffer holds three passes **including the active pass**; starting a fourth
-evicts the oldest. A stopped mid-pass take is labeled Partial. Seeking, changing
-the loop or speed, hiding the tab, switching songs, and audio interruptions stop
-recording without erasing retained takes. Sing and the recorder can use the same
-microphone independently. Hold the recorder control (or press Delete while it is
-focused) to clear takes.
+Takes autosave in this browser's IndexedDB and survive reloads. There is no
+three-take limit and no automatic deletion. Star favorites, filter to favorites,
+or delete individual unstarred takes. Hold the recorder control (or press Delete
+while it is focused) to review a **Delete unstarred** confirmation; favorites are
+always kept. Unstar a favorite before deleting it. The library shows each take's
+part, loop, speed, date, and Complete/Partial status, and loads only its metadata
+until you preview or download it.
 
-Takes exist only in this tab's memory. Download before reloading or closing;
-they are not included in preferences, saved offline HTML, or pitch-trace storage.
+Seeking, changing the loop or speed, hiding the tab, switching songs, and audio
+interruptions stop recording without erasing saved takes. A stopped mid-pass take
+is labeled Partial. Sing and the recorder can use the same microphone independently.
+Audio is checkpointed about once per second. After an abrupt page/process exit,
+the last committed prefix is recovered as Partial; the last uncommitted second
+can be lost. A normal Stop waits for the remaining samples to save.
+
+If local storage fills up or fails, capture and guide playback stop. Saved takes
+remain intact, and unsaved audio stays available to download or **Retry save**
+after freeing space. Recording cannot resume until that pending audio is saved
+or explicitly deleted. The app checks approximate available space before starting
+and also handles actual write failures, without silently evicting takes.
+
+Storage belongs to the **same browser profile, device, and site origin**, scoped
+by song slug (title if no slug is set). Localhost and a published website do not
+share recordings. Private browsing, clearing site data, or browser eviction can
+remove them. Melete requests persistent storage when supported, but the browser
+may decline; even persistence does not prevent manual clearing. Download important
+favorites. No audio is uploaded, synced, or embedded in preferences, offline HTML
+exports, or pitch traces. Older memory-only players cannot migrate unsaved takes
+through a reload; download those before updating.
+
 Recording never starts from a URL or saved preference. Loops are limited to five
-minutes per pass to bound allocation. Capture uses an inline AudioWorklet, with
-no network dependencies, and requires a supported browser with microphone access
-(HTTPS or localhost recommended).
+minutes per pass. At most three unsaved working buffers can be allocated; saved
+audio is released from RAM, and a stalled save stops capture instead of growing
+the queue. Capture uses an inline AudioWorklet with no network dependencies and
+requires a supported browser with microphone and IndexedDB access (HTTPS or
+localhost recommended). File-origin storage behavior varies by browser; use a
+stable hosted URL for a reliable library location.
 
 ## Scope And Limits
 

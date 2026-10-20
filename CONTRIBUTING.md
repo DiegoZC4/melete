@@ -41,9 +41,15 @@ fail the test. It closes the browser and deletes its temporary build in a
 `finally` block. Small reports and review screenshots are retained in ignored `qa/`.
 
 The loop-recorder checks use a generated 997 Hz fake microphone, never a physical
-microphone. They validate bounded three-pass storage, independent WAV downloads,
-absence of guide-synth audio in the recording, permission denial/cancellation,
-transport edits, and independent Sing/recorder microphone ownership. Temporary
+microphone. They validate bounded working memory without a saved-take cap,
+independent WAV downloads, byte-identical audio after reload, favorites and
+protected bulk deletion, interrupted-checkpoint recovery, and actual IndexedDB
+transaction rollback under injected quota errors. A failed save must stop capture
+and guide playback while preserving the saved prefix and a downloadable unsaved
+tail; retry must commit that exact tail. Unavailable/full storage must not fall
+back silently to memory-only recording. Other checks cover absence of guide-synth
+audio, permission denial/cancellation, transport edits, and independent
+Sing/recorder microphone ownership. Temporary
 WAVs are deleted with the test build. `QA_RECORDER_ONLY=1` runs just these focused
 browser checks; add `QA_FILE_ORIGIN=1` to verify a standalone file opened offline.
 Keep latency-sensitive audio/browser checks serialized against

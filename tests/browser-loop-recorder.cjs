@@ -1,12 +1,15 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {checkLocalTakeFailures} = require('./browser-local-takes.cjs');
 
 const recordingProbe = `
-  get recording() { return {state: takeState, notice: takeNotice, part: takeSession?.part,
-    capacity: takeBuffer?.passFrames || 0, sampleRate: takeBuffer?.sampleRate || 0,
-    takes: takeBuffer?.takes.map(take => takeBuffer.info(take)) || [],
-    bytes: takeBuffer?.takes.reduce((n, take) => n + take.pcm.byteLength, 0) || 0,
+  get takeStore() { return takeStore; },
+  get recording() { return {state: takeState, notice: takeNotice, part: takeJournal?.spec.part,
+    ready: takeLibraryReady, capacity: takeJournal?.buffer.passFrames || 0,
+    sampleRate: takeJournal?.buffer.sampleRate || allTakes()[0]?.sampleRate || 0,
+    takes: allTakes().reverse(),
+    bytes: takeJournal?.buffer.takes.reduce((n, take) => n + take.pcm.byteLength, 0) || 0,
     microphone: pitchCaptureStream?.getAudioTracks()[0]?.enabled || false,
     pitch: pitchCaptureState}; },
 `;
@@ -14,7 +17,7 @@ const recordingProbe = `
 async function checkLoopRecorder(page, origin, settled, {mobile, output, temporary}) {
   await page.goto(origin + '?loop=1-1.3');
   await settled();
-  await page.waitForFunction(() => __qa.engine.hasLoop());
+  await page.waitForFunction(() => __qa.engine.hasLoop() && __qa.recording.ready);
   if (await page.locator('#partChooser').isVisible()) await page.locator('#partChooserDismiss').click();
   assert.equal((await page.evaluate(() => __qa.recording)).state, 'off', 'URL never arms audio recording');
   if (await page.locator('#settingsToggle').getAttribute('aria-expanded') !== 'true') await page.locator('#settingsToggle').click();
@@ -28,18 +31,20 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
     throw error;
   }
   assert.equal(await page.locator('#settingsToggle').evaluate(button => button.classList.contains('has-recording')), true);
-  await page.waitForFunction(() => __qa.recording.takes.at(-1)?.id >= 5 && __qa.recording.takes.at(-1)?.seconds > .2);
+  await page.waitForFunction(() => __qa.recording.takes.length >= 5 && __qa.recording.takes.at(-1)?.seconds > .2);
   await page.locator('#recordTake').click();
   await page.waitForFunction(() => __qa.recording.state === 'off');
   const result = await page.evaluate(() => __qa.recording);
-  assert.equal(result.takes.length, 3);
-  assert.ok(result.takes.slice(0, 2).every(take => take.complete), JSON.stringify(result));
-  assert.equal(result.takes[2].complete, false, 'interrupted pass is explicitly partial');
+  assert.ok(result.takes.length >= 5, 'no three-take limit');
+  assert.ok(result.takes.slice(0, -1).every(take => take.complete), JSON.stringify(result));
+  assert.equal(result.takes.at(-1).complete, false, 'interrupted pass is explicitly partial');
+  assert.ok(result.takes.every(take => !take.unsaved));
   assert.ok(result.bytes <= result.capacity * 3 * 2);
+  assert.equal(result.bytes, 0, 'saved takes do not retain PCM arrays in RAM');
   assert.equal(result.microphone, false, 'only recorder owned input, so Stop disables it');
   assert.equal(await page.locator('#settingsToggle').evaluate(button => button.classList.contains('has-recording')), false);
   const complete = result.takes[0];
-  await page.getByRole('button', {name: `Listen to take ${complete.id}`, exact: true}).click();
+  await page.getByRole('button', {name: `Listen to take ${complete.number}`, exact: true}).click();
   await page.waitForFunction(() => !document.querySelector('#takePreview').paused && document.querySelector('#takePreview').readyState >= 2);
   assert.equal(await page.evaluate(() => __qa.engine.playing), false, 'preview cannot overlap guide playback');
   await page.keyboard.press('Space');
@@ -49,11 +54,11 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
   await page.locator('#takePreview').press('ArrowRight');
   assert.equal(await page.evaluate(() => __qa.engine.currentSeconds()), beforePreviewSeek, 'native audio keys do not seek the score');
   const pending = page.waitForEvent('download');
-  await page.getByRole('button', {name: `Download take ${complete.id} as WAV`, exact: true}).click();
+  await page.getByRole('button', {name: `Download take ${complete.number} as WAV`, exact: true}).click();
   const download = await pending;
   const filename = path.join(temporary, `loop-take-${mobile ? 'mobile' : 'desktop'}.wav`);
   await download.saveAs(filename);
-  assert.match(download.suggestedFilename(), new RegExp(`take-${complete.id}\\.wav$`));
+  assert.match(download.suggestedFilename(), new RegExp(`take-${complete.number}\\.wav$`));
   const wav = await fs.readFile(filename);
   assert.equal(wav.toString('ascii', 8, 12), 'WAVE');
   assert.equal(wav.readUInt16LE(22), 1);
@@ -91,6 +96,27 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
     }
   });
   assert.equal(panelAboveReturn, true, 'floating score controls cannot cover take review');
+
+  await page.getByRole('button', {name: `Favorite take ${complete.number}`, exact: true}).click();
+  await page.waitForFunction(id => __qa.recording.takes.find(take => take.id === id)?.favorite, complete.id);
+  await page.reload(); await settled();
+  await page.waitForFunction(() => __qa.recording.ready);
+  const restored = await page.evaluate(() => __qa.recording);
+  assert.equal(restored.takes.length, result.takes.length);
+  assert.equal(restored.takes[0].favorite, true, 'favorites survive reload');
+  assert.equal(restored.bytes, 0, 'restoring a library loads metadata, not every audio file');
+  assert.equal(restored.state, 'off');
+  if (await page.locator('#settingsToggle').getAttribute('aria-expanded') !== 'true') await page.locator('#settingsToggle').click();
+  await page.locator('#loopRecorder').click();
+  const restoredAudio = await page.evaluate(async id => Array.from(new Uint8Array(await (await __qa.takeStore.wav(id)).arrayBuffer())), complete.id);
+  assert.deepEqual(Buffer.from(restoredAudio), wav, 'reloaded WAV is byte-identical');
+  await page.locator('#takeFavorites').click();
+  assert.equal(await page.locator('.take-row').count(), 1);
+  assert.equal(await page.getByRole('button', {name: `Delete take ${complete.number}`, exact: true}).isDisabled(), true);
+  await page.locator('#takeFavorites').click();
+  const unwanted = restored.takes[1];
+  await page.getByRole('button', {name: `Delete take ${unwanted.number}`, exact: true}).click();
+  await page.waitForFunction(id => !__qa.recording.takes.some(take => take.id === id), unwanted.id);
 
   // Sing and audio recording own separate branches of a single input stream.
   await page.locator('#closeTakes').click();
@@ -132,10 +158,15 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
   }
   // Hold-clear also works from the keyboard and never starts a new recording.
   await page.locator('#recordTake').press('Delete');
-  await page.waitForFunction(() => __qa.recording.takes.length === 0);
+  await page.locator('#cancelTakeDelete').click();
+  assert.ok((await page.evaluate(() => __qa.recording)).takes.length > 1);
+  await page.locator('#recordTake').press('Delete');
+  await page.locator('#confirmTakeDelete').click();
+  await page.waitForFunction(() => __qa.recording.takes.length === 1);
   await page.reload(); await settled();
+  await page.waitForFunction(() => __qa.recording.ready);
   assert.equal((await page.evaluate(() => __qa.recording)).state, 'off');
-  assert.equal((await page.evaluate(() => __qa.recording)).takes.length, 0);
+  assert.equal((await page.evaluate(() => __qa.recording)).takes.length, 1, 'cleanup keeps starred audio');
   if (await page.locator('#settingsToggle').getAttribute('aria-expanded') !== 'true') await page.locator('#settingsToggle').click();
   await page.locator('#loopRecorder').click();
   await page.evaluate(() => {
@@ -156,12 +187,13 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
   await page.evaluate(() => grantLateMicrophone());
   await page.waitForFunction(() => __qa.recording.state === 'off');
   assert.equal((await page.evaluate(() => __qa.recording)).microphone, false, 'late permission cannot restart a canceled take');
-  assert.equal((await page.evaluate(() => __qa.recording)).takes.length, 0);
+  assert.equal((await page.evaluate(() => __qa.recording)).takes.length, 1);
   await page.evaluate(() => { navigator.mediaDevices.getUserMedia = realGetUserMedia; });
   await page.locator('#closeTakes').click();
-  return {retained: result.takes.map(({id, complete}) => ({id, complete})), micAmplitude, guideAmplitude,
+  const localStorage = await checkLocalTakeFailures(page, origin, settled, {mobile, output, temporary});
+  return {retained: result.takes.map(({number, complete}) => ({number, complete})), micAmplitude, guideAmplitude,
     boundedBytes: result.bytes, wavBytes: wav.length, independentMicrophoneOwners: true, transportEdits: 3,
-    deniedPermission: true, canceledPermission: true};
+    deniedPermission: true, canceledPermission: true, reloadExactAudio: true, favoritesAndDeletion: true, localStorage};
 }
 
 module.exports = {recordingProbe, checkLoopRecorder};

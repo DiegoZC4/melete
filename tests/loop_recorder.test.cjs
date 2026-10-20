@@ -1,20 +1,118 @@
 const assert = require('node:assert/strict');
 const {test} = require('node:test');
 const vm = require('node:vm');
-const {TakeBuffer, wavBytes, WORKLET_SOURCE, MAX_LOOP_SECONDS, PcmCapture} = require('../template/loop_recorder.js');
+const {TakeBuffer, TakeStore, TakeJournal, wavBytes, WORKLET_SOURCE, MAX_LOOP_SECONDS, PcmCapture} = require('../template/loop_recorder.js');
 
-test('three-pass storage includes the active pass and evicts only the oldest take', () => {
+test('blocked IndexedDB access fails lazily and can be retried without breaking player initialization', async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+  try {
+    Object.defineProperty(globalThis, 'indexedDB', {configurable: true, get() { throw new Error('Storage blocked'); }});
+    const store = new TakeStore();
+    await assert.rejects(store.list('song'), /Storage blocked/);
+    assert.equal(store.opening, null);
+    await assert.rejects(store.list('song'), /Storage blocked/);
+    await assert.rejects(new TakeStore(null).list('song'), /unavailable/);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'indexedDB', original);
+    else delete globalThis.indexedDB;
+  }
+});
+
+test('working audio applies backpressure without evicting unsaved takes', () => {
   const buffer = new TakeBuffer(100, 2);
-  for (let pass = 0; pass < 6; pass++) {
+  for (let pass = 0; pass < 3; pass++) {
     buffer.begin(pass * 200);
     buffer.append(pass * 200, new Float32Array(200).fill((pass + 1) / 10));
     assert.ok(buffer.takes.length <= 3);
     assert.ok(buffer.takes.reduce((sum, take) => sum + take.pcm.byteLength, 0) <= 3 * 200 * 2);
   }
-  buffer.finish(1200, true);
-  assert.deepEqual(buffer.takes.map(take => take.id), [4, 5, 6]);
+  assert.throws(() => buffer.begin(600), /not keeping up/);
+  assert.deepEqual(buffer.takes.map(take => take.id), [1, 2, 3]);
   assert.ok(buffer.takes.every(take => buffer.info(take).complete));
-  assert.equal(buffer.samples(buffer.takes[1])[0], Math.round(.5 * 32767));
+  assert.equal(buffer.samples(buffer.takes[1])[0], Math.round(.2 * 32767));
+  buffer.release(buffer.takes[0]);
+  buffer.begin(600);
+  assert.deepEqual(buffer.takes.map(take => take.id), [2, 3, 4]);
+});
+
+function memoryStore() {
+  const records = new Map(), chunks = new Map();
+  return {records, chunks, fail: false, async append(record, offset, pcm, status) {
+    if (this.fail) throw new DOMException('Test full storage', 'QuotaExceededError');
+    const previous = records.get(record.id);
+    assert.equal(offset, previous?.frames || 0);
+    const saved = {...record, ...previous, ...status, number: previous?.number || records.size + 1, frames: offset + pcm.length};
+    const audio = chunks.get(record.id) || [];
+    audio.push(...pcm);
+    chunks.set(record.id, audio);
+    records.set(record.id, structuredClone(saved));
+    return structuredClone(saved);
+  }};
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('journal stores many takes while releasing finalized PCM from memory', async () => {
+  const store = memoryStore();
+  const journal = new TakeJournal(store, 'song', {seconds: 2, part: 'Bass', label: '19-23'}, 100);
+  journal.begin(0);
+  for (let pass = 0; pass < 30; pass++) {
+    journal.append(pass * 200, new Float32Array(200).fill(.1));
+    journal.begin((pass + 1) * 200);
+    await tick();
+    assert.ok(journal.buffer.takes.length <= 1);
+  }
+  journal.finish(6000);
+  await journal.flush();
+  assert.equal(store.records.size, 30);
+  assert.ok([...store.records.values()].every(take => take.complete && take.finalized && take.frames === 200));
+  assert.equal(journal.buffer.takes.length, 0);
+  assert.equal(journal.entries.size, 0);
+});
+
+test('failed checkpoint preserves earlier saves and the unsaved tail for download and retry', async () => {
+  const store = memoryStore(), errors = [];
+  const journal = new TakeJournal(store, 'song', {seconds: 3}, 100, {onError: error => errors.push(error.name)});
+  journal.begin(0);
+  journal.append(0, new Float32Array(100).fill(.2));
+  await tick();
+  const id = journal.views()[0].id;
+  store.records.get(id).favorite = true;
+  store.fail = true;
+  journal.append(100, new Float32Array(100).fill(.3));
+  await tick();
+  journal.finish(200);
+  await journal.flush();
+  assert.deepEqual(errors, ['QuotaExceededError']);
+  assert.equal(store.records.get(id).frames, 100);
+  assert.equal(journal.views()[0].frames, 200);
+  assert.equal(journal.views()[0].unsaved, true);
+  const wav = Buffer.from(await journal.wav(id).arrayBuffer());
+  assert.equal(wav.readUInt32LE(40), 400);
+  store.fail = false;
+  await journal.retry();
+  assert.equal(store.records.get(id).frames, 200);
+  assert.equal(store.records.get(id).favorite, true);
+  assert.equal(store.records.get(id).complete, false);
+  assert.equal(store.records.get(id).finalized, true);
+  assert.equal(journal.entries.size, 0);
+});
+
+test('stalled writes bound working memory without silently dropping a pass', async () => {
+  const store = memoryStore(), realAppend = store.append.bind(store), release = [];
+  store.append = (...args) => new Promise(resolve => release.push(() => resolve(realAppend(...args))));
+  const errors = [];
+  const journal = new TakeJournal(store, 'song', {seconds: 1}, 100, {onError: error => errors.push(error.message)});
+  for (let i = 0; i < 3; i++) { journal.begin(i * 100); journal.append(i * 100, new Float32Array(100)); }
+  journal.begin(300);
+  journal.finish(300);
+  assert.equal(journal.buffer.takes.length, 3);
+  assert.match(errors[0], /not keeping up/);
+  release.splice(0).forEach(resolve => resolve());
+  await journal.flush();
+  store.append = realAppend;
+  await journal.retry();
+  assert.equal(journal.entries.size, 0);
+  assert.equal(store.records.size, 3);
 });
 
 test('frame routing splits asynchronous chunks at the actual loop boundary without mixing takes', () => {
