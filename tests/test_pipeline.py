@@ -583,7 +583,8 @@ console.log(JSON.stringify([
             "predictiveFollowRange = { startTick: transition.currentTick, targetTick: transition.tick }",
             app,
         )
-        self.assertIn("transition.tick >= loopEndTick", app)
+        self.assertIn("const end = loopTickRange().end;", app)
+        self.assertIn("transition.tick >= end", app)
         self.assertIn("else predictiveVerticalFollow(cursor)", app)
         self.assertIn(
             'window.addEventListener("pointerdown", interruptVerticalFollow', app
@@ -1118,7 +1119,7 @@ console.log(JSON.stringify({{
         self.assertIn("if (hasLoop && first + offset === loopEndMeasure) {", app)
         # The closing sign closes the measure, so it stands on that measure's
         # far barline rather than beside its number.
-        self.assertIn("svg.append(pitchBarRepeatSign(xAtTick(measure[0] + measure[1]) - 1, 11, repeatSignHeight, -1).group);", app)
+        self.assertIn("svg.append(pitchBarRepeatSign(xAtTick(loopRange.end) - 1, 11, repeatSignHeight, -1).group);", app)
 
         start = app.index("  function pitchBarRepeatSign")
         end = app.index("\n  }", start) + len("\n  }")
@@ -1298,10 +1299,12 @@ console.log(JSON.stringify(sweepSupersededStorage("autumn")));
         self.assertIn("      loopStart: loopStartMeasure,\n      loopEnd: loopEndMeasure,\n", app)
         # Setting or clearing a loop has to write it, or it only lives in memory.
         self.assertNotIn("    updateLoopState();\n    if (Number.isInteger(loopStartMeasure)", app)
-        self.assertEqual(app.count("updateLoopState({ persist: true });"), 2)
+        self.assertEqual(app.count("updateLoopState({ persist: true });"), 3)
         # A rebuilt, shorter score must not restore a loop past its last measure.
-        self.assertIn("const lastMeasure = (sequence?.measures?.length || 0) - 1;", app)
-        self.assertIn("&& stored.loopStart >= 0 && stored.loopEnd <= lastMeasure && stored.loopStart <= stored.loopEnd) {", app)
+        self.assertIn("restoreLoopState(stored);", app)
+        self.assertIn("index >= 0 && index < sequence.measures.length", app)
+        self.assertIn("range.start >= range.end || range.end > sequence.endTick", app)
+        self.assertIn("      loopStartTick,\n      loopEndTick,", app)
 
     def test_singing_and_the_line_break_marks_survive_a_refresh(self) -> None:
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")
@@ -1679,7 +1682,8 @@ console.log(JSON.stringify(out));
         # is not, because there is nothing to come back from.
         self.assertIn('elements.loopControls.classList.toggle("has-complete-loop", hasEnd);', app)
         self.assertIn('elements.loopControls.classList.toggle("has-partial-loop", hasStart && !hasEnd);', app)
-        self.assertIn("    if (hasEnd) {\n      const start = hasStart ? sequence.measures[loopStartMeasure][0] : 0;", app)
+        self.assertIn("    if (hasEnd) {\n      const { start, end } = loopTickRange();", app)
+        self.assertIn("start: startMeasure ? loopStartTick ?? startMeasure[0] : 0,", app)
 
         start = app.index("  function currentMeasureIndex")
         end = app.index("\n  }", start) + len("\n  }")
@@ -2222,8 +2226,8 @@ console.log(JSON.stringify({{
         self.assertIn("scheduleCursorTrimBurst()", render_finished)
         self.assertIn('loopStartMeasure = current;', app)
         self.assertIn('loopEndMeasure = current;', app)
-        self.assertIn('hasStart ? String(loopStartMeasure + 1) : "Start"', app)
-        self.assertIn('hasEnd ? String(loopEndMeasure + 1) : "End"', app)
+        self.assertIn('hasStart ? (loopStartTick === null ? String(loopStartMeasure + 1) : scoreLocationAtTick(loopStartTick)) : "Start"', app)
+        self.assertIn('hasEnd ? (loopEndTick === null ? String(loopEndMeasure + 1) : scoreLocationAtTick(loopEndTick)) : "End"', app)
         self.assertNotIn('`Start ${loopStartMeasure + 1}`', app)
         self.assertNotIn('`End ${loopEndMeasure + 1}`', app)
         loop_point_rule = styles.split(".loop-point {", 1)[1].split("}", 1)[0]

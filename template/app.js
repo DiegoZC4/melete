@@ -109,6 +109,9 @@
   let pendingNotationReload = null;
   let loopStartMeasure = null;
   let loopEndMeasure = null;
+  let loopStartTick = null;
+  let loopEndTick = null;
+  let pendingLoopLink;
   let practicePartIndex = null;
   let partDivisi = [];
   let practicePartPager = null;
@@ -2006,6 +2009,8 @@
       } : null,
       loopStart: loopStartMeasure,
       loopEnd: loopEndMeasure,
+      loopStartTick,
+      loopEndTick,
     };
   }
 
@@ -2056,8 +2061,7 @@
     activePracticeMix = ["learn", "check"].includes(state.practiceMixMode) ? state.practiceMixMode : null;
     practiceMixPartIndex = activePracticeMix ? state.practiceMixPart ?? practicePartIndex : null;
     practiceMixUndo = normalizePracticeMixUndo(state.practiceMixUndo);
-    loopStartMeasure = Number.isInteger(state.loopStart) ? state.loopStart : null;
-    loopEndMeasure = Number.isInteger(state.loopEnd) ? state.loopEnd : null;
+    restoreLoopState(state);
     tempoControl.setValue(state.tempo, false);
     metronomeControl.setValue(state.metronome, false);
     verticalControl.setValue(state.vertical, false);
@@ -2268,6 +2272,8 @@
       state.metronome = defaults.metronome;
       state.loopStart = null;
       state.loopEnd = null;
+      state.loopStartTick = null;
+      state.loopEndTick = null;
     };
     const resetDisplay = (state, defaults) => {
       state.scoreView = defaults.scoreView;
@@ -2286,8 +2292,8 @@
     }, { cancelActive: (pointerId) => practicePartPager?.cancel(pointerId) });
     registerResetTarget(elements.tempo, "Speed", (state, defaults) => { state.tempo = defaults.tempo; });
     registerResetTarget(elements.metronome, "metronome volume", (state, defaults) => { state.metronome = defaults.metronome; });
-    registerResetTarget(elements.loopStart, "loop start", (state) => { state.loopStart = null; }, { holdToReset: false });
-    registerResetTarget(elements.loopEnd, "loop end", (state) => { state.loopEnd = null; }, { holdToReset: false });
+    registerResetTarget(elements.loopStart, "loop start", (state) => { state.loopStart = null; state.loopStartTick = null; }, { holdToReset: false });
+    registerResetTarget(elements.loopEnd, "loop end", (state) => { state.loopEnd = null; state.loopEndTick = null; }, { holdToReset: false });
     registerResetTarget(elements.flowToggle, "Scroll", (state, defaults) => { state.flow = defaults.flow; });
     registerResetTarget(elements.verticalScale, "vertical scale", (state, defaults) => { state.vertical = defaults.vertical; });
     registerResetTarget(elements.horizontalScale, "horizontal scale", (state, defaults) => { state.horizontal = defaults.horizontal; });
@@ -2295,7 +2301,9 @@
 
     registerResetTarget(document.querySelector(".practice-speed > span"), "Speed", (state, defaults) => { state.tempo = defaults.tempo; }, { labelTarget: true });
     registerResetTarget(document.querySelector(".practice-metronome-volume > span"), "metronome volume", (state, defaults) => { state.metronome = defaults.metronome; }, { labelTarget: true });
-    registerResetTarget(document.getElementById("loopLabel"), "Loop", (state) => { state.loopStart = null; state.loopEnd = null; }, { labelTarget: true });
+    registerResetTarget(document.getElementById("loopLabel"), "Loop", (state) => {
+      state.loopStart = null; state.loopEnd = null; state.loopStartTick = null; state.loopEndTick = null;
+    }, { labelTarget: true });
     registerResetTarget(document.querySelector(".display-direction-row > span"), "Scroll", (state, defaults) => { state.flow = defaults.flow; }, { labelTarget: true });
     registerResetTarget(document.getElementById("scaleLabel"), "Scale", (state, defaults) => {
       state.vertical = defaults.vertical;
@@ -2317,6 +2325,8 @@
     practiceMixUndo = null;
     loopStartMeasure = null;
     loopEndMeasure = null;
+    loopStartTick = null;
+    loopEndTick = null;
     tempoControl.setValue(defaults.tempo, false);
     metronomeControl.setValue(defaults.metronome, false);
     verticalControl.setValue(defaults.vertical, false);
@@ -2359,6 +2369,8 @@
       } : null,
       loopStart: loopStartMeasure,
       loopEnd: loopEndMeasure,
+      loopStartTick,
+      loopEndTick,
       sing: pitchCaptureEnabled(),
     };
   }
@@ -2388,15 +2400,7 @@
     if (Array.isArray(stored.pans) && stored.pans.length === parts.length) {
       trackPans = stored.pans.map((value) => nearestAllowed(clamp(Number(value) || 0, -100, 100), PAN_VALUES));
     }
-    // A loop outlives the page it was set on, but only if it still points at
-    // measures this score has: a shorter rebuild would otherwise restore a loop
-    // running off the end.
-    const lastMeasure = (sequence?.measures?.length || 0) - 1;
-    if (Number.isInteger(stored.loopStart) && Number.isInteger(stored.loopEnd)
-      && stored.loopStart >= 0 && stored.loopEnd <= lastMeasure && stored.loopStart <= stored.loopEnd) {
-      loopStartMeasure = stored.loopStart;
-      loopEndMeasure = stored.loopEnd;
-    }
+    restoreLoopState(stored);
     wantsPitchCapture = stored.sing === true;
     const storedMixUndo = normalizePracticeMixUndo(stored.practiceMixUndo);
     const storedMixPart = stored.practiceMixPart ?? practicePartIndex;
@@ -2962,12 +2966,19 @@
     const detail = event.detail || {};
     const field = (value) => typeof value === "string" ? value : undefined;
     applyPartLink({ part: field(detail.part), div: field(detail.div) });
+    applyLoopLink(field(detail.loop));
   });
   window.addEventListener("hashchange", () => {
     const link = partLinkFields(window.location.hash);
-    if (link.part === undefined && link.div === undefined) return;
-    consumePartLink();
-    applyPartLink(link);
+    if (link.part !== undefined || link.div !== undefined) {
+      consumePartLink();
+      applyPartLink(link);
+    }
+    const loop = loopLinkValue(window.location.hash);
+    if (loop !== undefined) {
+      consumeLoopLink();
+      applyLoopLink(loop);
+    }
   });
 
   function ensurePracticePartVisible() {
@@ -4357,18 +4368,129 @@
     return measureIndexAtTick(tick + 1e-6);
   }
 
+  function loopLinkValue(...addresses) {
+    let value;
+    addresses.forEach(address => {
+      for (const [key, item] of new URLSearchParams(String(address || "").replace(/^[#?]/u, ""))) {
+        if (key.toLowerCase() === "loop") value = item.trim();
+      }
+    });
+    return value;
+  }
+
+  function loopAddressTick(address, end = false) {
+    const match = /^([1-9]\d*)(?:\.([1-9]\d*)(?:\.(\d{1,9}))?)?$/u.exec(address);
+    if (!match || !sequence?.measures?.length) return null;
+    const measureIndex = Number(match[1]) - 1;
+    const beat = Number(match[2] || 1);
+    const fraction = Number(`0.${match[3] || "0"}`);
+    // All URL endpoints are positions: omitted beat/fraction means 1.0.
+    if (end && measureIndex === sequence.measures.length && beat === 1 && fraction === 0) return sequence.endTick;
+    const measure = sequence.measures[measureIndex];
+    if (!measure) return null;
+    const beatTicks = sequence.division * 4 / (measure[3] || 4);
+    const offset = (beat - 1 + fraction) * beatTicks;
+    if (!Number.isFinite(offset) || beat > (measure[2] || 4) || offset < 0 || offset >= measure[1]) return null;
+    return measure[0] + offset;
+  }
+
+  function parseLoopLink(value) {
+    if (typeof value !== "string" || value.length > 100) return null;
+    const endpoints = value.trim().split("-");
+    if (endpoints.length !== 2) return null;
+    const start = loopAddressTick(endpoints[0].trim());
+    const end = loopAddressTick(endpoints[1].trim(), true);
+    return start !== null && end !== null && start < end && end <= sequence.endTick ? { start, end } : null;
+  }
+
+  function consumeLoopLink() {
+    try {
+      const address = new URL(window.location.href);
+      const keep = text => text.replace(/^[#?]/u, "").split("&")
+        .filter(token => token && loopLinkValue(token) === undefined).join("&");
+      address.search = keep(address.search);
+      address.hash = keep(address.hash);
+      window.history.replaceState(window.history.state, "", address.href);
+    } catch {
+      // Embedded players receive their links from the collection instead.
+    }
+  }
+
+  function loopTickRange() {
+    const startMeasure = sequence?.measures?.[loopStartMeasure];
+    const endMeasure = sequence?.measures?.[loopEndMeasure];
+    return {
+      start: startMeasure ? loopStartTick ?? startMeasure[0] : 0,
+      end: endMeasure ? loopEndTick ?? endMeasure[0] + endMeasure[1] : null,
+    };
+  }
+
+  function restoreLoopState(state) {
+    const validMeasure = index => Number.isInteger(index) && index >= 0 && index < sequence.measures.length;
+    loopStartMeasure = validMeasure(state.loopStart) ? state.loopStart : null;
+    loopEndMeasure = validMeasure(state.loopEnd) ? state.loopEnd : null;
+    loopStartTick = loopStartMeasure !== null ? state.loopStartTick ?? null : null;
+    loopEndTick = loopEndMeasure !== null ? state.loopEndTick ?? null : null;
+    const validTick = (tick, index, end) => {
+      if (tick === null) return true;
+      const [start, duration] = sequence.measures[index];
+      return Number.isFinite(tick) && (end ? tick > start && tick <= start + duration : tick >= start && tick < start + duration);
+    };
+    const range = loopTickRange();
+    if ((state.loopStart != null && !validMeasure(state.loopStart)) || (state.loopEnd != null && !validMeasure(state.loopEnd))
+      || !validTick(loopStartTick, loopStartMeasure, false) || !validTick(loopEndTick, loopEndMeasure, true)
+      || (range.end !== null && (range.start >= range.end || range.end > sequence.endTick))) {
+      loopStartMeasure = loopEndMeasure = loopStartTick = loopEndTick = null;
+    }
+  }
+
+  function applyLoopLink(value) {
+    if (value === undefined) return false;
+    if (!ready || !engine) {
+      pendingLoopLink = value;
+      return true;
+    }
+    pendingLoopLink = undefined;
+    const range = parseLoopLink(value);
+    if (!range) {
+      showToast("This loop link is not a valid range in this score; your loop is unchanged", "error");
+      return false;
+    }
+    // Keep the existing whole-measure UI and storage format; exact offsets
+    // supplement it only when a link lands inside a bar.
+    loopStartMeasure = measureIndexAtTick(range.start);
+    loopEndMeasure = measureIndexAtTick(range.end);
+    if (loopEndMeasure > 0 && sequence.measures[loopEndMeasure][0] === range.end) loopEndMeasure -= 1;
+    const endMeasure = sequence.measures[loopEndMeasure];
+    loopStartTick = range.start === sequence.measures[loopStartMeasure][0] ? null : range.start;
+    loopEndTick = range.end === endMeasure[0] + endMeasure[1] ? null : range.end;
+    api?.pause();
+    engine.pause();
+    updateLoopState({ persist: true });
+    engine.seek(engine.secondsAtTick(range.start));
+    requestAnimationFrame(() => {
+      const direction = playbackDirection();
+      if (direction) scrollToPlayback(direction, "auto", true);
+    });
+    showToast(`Loop ready: ${elements.loopStart.textContent} to ${elements.loopEnd.textContent}`);
+    return true;
+  }
+
   function updateLoopState({ persist = false } = {}) {
     const hasStart = Number.isInteger(loopStartMeasure);
     const hasEnd = Number.isInteger(loopEndMeasure);
+    const startLabel = hasStart ? (loopStartTick === null ? String(loopStartMeasure + 1) : scoreLocationAtTick(loopStartTick)) : "Start";
+    const endLabel = hasEnd ? (loopEndTick === null ? String(loopEndMeasure + 1) : scoreLocationAtTick(loopEndTick)) : "End";
     elements.loopStart.classList.toggle("is-set", hasStart);
     elements.loopEnd.classList.toggle("is-set", hasEnd);
-    elements.loopStart.textContent = hasStart ? String(loopStartMeasure + 1) : "Start";
-    elements.loopEnd.textContent = hasEnd ? String(loopEndMeasure + 1) : "End";
-    elements.loopStart.setAttribute("aria-label", hasStart ? `Set loop start to selected measure; currently measure ${loopStartMeasure + 1}` : "Set loop start to selected measure");
-    elements.loopEnd.setAttribute("aria-label", hasEnd ? `Set loop end to selected measure; currently measure ${loopEndMeasure + 1}` : "Set loop end to selected measure");
-    elements.loopStart.dataset.help = hasStart ? `Move loop start; currently measure ${loopStartMeasure + 1}.` : "Set loop start at selected measure. Shortcut: [";
-    elements.loopEnd.dataset.help = hasEnd ? `Move loop end; currently measure ${loopEndMeasure + 1}.` : "Set loop end at selected measure. Shortcut: ]";
+    elements.loopStart.textContent = startLabel;
+    elements.loopEnd.textContent = endLabel;
+    elements.loopStart.setAttribute("aria-label", hasStart ? `Set loop start to selected measure; currently ${startLabel}` : "Set loop start to selected measure");
+    elements.loopEnd.setAttribute("aria-label", hasEnd ? `Set loop end to selected measure; currently ${endLabel}` : "Set loop end to selected measure");
+    elements.loopStart.dataset.help = hasStart ? `Move loop start; currently ${startLabel}.` : "Set loop start at selected measure. Shortcut: [";
+    elements.loopEnd.dataset.help = hasEnd ? `Move loop end; currently ${endLabel}${loopEndTick === null ? " (inclusive)" : " (exclusive)"}.` : "Set loop end at selected measure. Shortcut: ]";
     [elements.loopStart, elements.loopEnd].forEach((button) => {
+      button.style.fontSize = button.textContent.includes(".") ? `${Math.min(10, 64 / button.textContent.length)}px` : "";
       button.dataset.help += " Hold to clear the loop.";
       button.title = button.dataset.help;
     });
@@ -4379,9 +4501,7 @@
     elements.loopControls.classList.toggle("has-complete-loop", hasEnd);
 
     if (hasEnd) {
-      const start = hasStart ? sequence.measures[loopStartMeasure][0] : 0;
-      const endMeasure = sequence.measures[loopEndMeasure];
-      const end = endMeasure[0] + endMeasure[1];
+      const { start, end } = loopTickRange();
       engine?.setLoop(start, end);
       const left = clamp((start / sequence.endTick) * 100, 0, 100);
       const right = clamp((end / sequence.endTick) * 100, left, 100);
@@ -4400,20 +4520,26 @@
     const current = currentMeasureIndex();
     if (kind === "start") {
       loopStartMeasure = current;
-      if (Number.isInteger(loopEndMeasure) && Number.isInteger(loopStartMeasure) && loopStartMeasure > loopEndMeasure) loopEndMeasure = null;
+      loopStartTick = null;
+      const range = loopTickRange();
+      if (range.end !== null && range.start >= range.end) { loopEndMeasure = null; loopEndTick = null; }
     } else {
       loopEndMeasure = current;
-      if (Number.isInteger(loopStartMeasure) && Number.isInteger(loopEndMeasure) && loopEndMeasure < loopStartMeasure) loopStartMeasure = null;
+      loopEndTick = null;
+      const range = loopTickRange();
+      if (range.start >= range.end) { loopStartMeasure = null; loopStartTick = null; }
     }
     updateLoopState({ persist: true });
     if (Number.isInteger(loopStartMeasure) && Number.isInteger(loopEndMeasure)) {
-      showToast(`Looping measures ${loopStartMeasure + 1}–${loopEndMeasure + 1}`);
+      showToast(`Looping ${elements.loopStart.textContent} to ${elements.loopEnd.textContent}`);
     }
   }
 
   function clearLoop() {
     loopStartMeasure = null;
     loopEndMeasure = null;
+    loopStartTick = null;
+    loopEndTick = null;
     updateLoopState({ persist: true });
   }
 
@@ -6161,6 +6287,7 @@
       // printed.
       const hasLoop = Number.isInteger(loopEndMeasure);
       const hasOpening = hasLoop && Number.isInteger(loopStartMeasure);
+      const loopRange = loopTickRange();
 
       rowMeasures.forEach((measure, offset) => {
         const x = xAtTick(measure[0]);
@@ -6174,9 +6301,9 @@
         // closing one at the end of the last measure the loop covers.
         let numberX = x + 3;
         if (hasOpening && first + offset === loopStartMeasure) {
-          const sign = pitchBarRepeatSign(x + 1, 11, repeatSignHeight, 1);
+          const sign = pitchBarRepeatSign(xAtTick(loopRange.start) + 1, 11, repeatSignHeight, 1);
           svg.append(sign.group);
-          numberX = x + sign.width + 4;
+          if (loopRange.start === measure[0]) numberX = x + sign.width + 4;
         }
         const label = createSvgElement("text", {
           class: `bar-measure-number${chapters.has(first + offset) ? " is-chapter" : ""}`,
@@ -6185,7 +6312,7 @@
         label.textContent = String(number);
         svg.append(label);
         if (hasLoop && first + offset === loopEndMeasure) {
-          svg.append(pitchBarRepeatSign(xAtTick(measure[0] + measure[1]) - 1, 11, repeatSignHeight, -1).group);
+          svg.append(pitchBarRepeatSign(xAtTick(loopRange.end) - 1, 11, repeatSignHeight, -1).group);
         }
       });
       svg.append(createSvgElement("line", {
@@ -7288,9 +7415,8 @@
     const transition = nextVerticalSystemTransition(cursor);
     if (!transition) return false;
     if (Number.isInteger(loopEndMeasure)) {
-      const loopEnd = sequence.measures[loopEndMeasure];
-      const loopEndTick = Number(loopEnd?.[0]) + Number(loopEnd?.[1]);
-      if (transition.currentTick < loopEndTick && transition.tick >= loopEndTick) return false;
+      const end = loopTickRange().end;
+      if (transition.currentTick < end && transition.tick >= end) return false;
     }
     const header = elements.transport.getBoundingClientRect().height;
     const topLimit = header + 8;
@@ -7990,6 +8116,11 @@
       updatePitchCaptureAppearance();
       // A link naming a part wins; otherwise a first visit with no part asks.
       const ownPartLink = partLinkFields(window.location.search, window.location.hash);
+      const ownLoopLink = loopLinkValue(window.location.search, window.location.hash);
+      if (ownLoopLink !== undefined) {
+        pendingLoopLink ??= ownLoopLink;
+        consumeLoopLink();
+      }
       const ownLinkNamesPart = ownPartLink.part !== undefined || ownPartLink.div !== undefined;
       if (ownLinkNamesPart) consumePartLink();
       const arrivalLink = pendingPartLink || (ownLinkNamesPart ? ownPartLink : null);
@@ -8116,6 +8247,12 @@
           pendingNotationReload.playerReady = true;
           finishNotationReloadWhenReady();
         } else engine.pushPosition();
+        updateLoopState();
+        // AlphaTab still resets its external output to zero as playerReady
+        // unwinds. Follow a startup link after that reset and cursor paint.
+        if (pendingLoopLink !== undefined) requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (pendingLoopLink !== undefined) applyLoopLink(pendingLoopLink);
+        }));
         initializeMediaSession();
         updatePitchCaptureAppearance();
         if (scoreView === "bars") scheduleBarRender();

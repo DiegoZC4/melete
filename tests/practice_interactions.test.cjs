@@ -228,12 +228,12 @@ test('loop endpoints include their selected measure and preserve complete measur
   let tick = 0, loop;
   const c = vm.createContext({
     sequence: {measures: [[0, 960], [960, 1440], [2400, 960]], endTick: 3360},
-    loopStartMeasure: null, loopEndMeasure: null, scoreView: 'standard',
+    loopStartMeasure: null, loopEndMeasure: null, loopStartTick: null, loopEndTick: null, scoreView: 'standard',
     engine: {tickAtSeconds: s => s, currentSeconds: () => tick, setLoop: (...values) => {loop = values;}},
     elements: Object.fromEntries(['loopStart', 'loopEnd', 'loopClear', 'loopControls', 'loopBand'].map(k => [k, element()])),
     clamp: (v, min, max) => Math.min(max, Math.max(min, v)), savePreferences() {}, showToast() {},
   });
-  for (const name of ['measureIndexAtTick', 'currentMeasureIndex', 'updateLoopState', 'setLoopPoint', 'clearLoop']) {
+  for (const name of ['measureIndexAtTick', 'currentMeasureIndex', 'loopTickRange', 'updateLoopState', 'setLoopPoint', 'clearLoop']) {
     vm.runInContext(source(name), c);
   }
   c.setLoopPoint('end');

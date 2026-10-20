@@ -11,6 +11,7 @@ const {checkCursorEdges} = require('./browser-cursor-layout.cjs');
 const {checkPanHolds} = require('./browser-pan-hold.cjs');
 const {checkFirstVisit, checkTouchVolumeTip, checkPartLinks, checkTouchRows, checkScrubLabel} = require('./browser-onboarding.cjs');
 const {pitchbarProbe, checkPitchbarSpacing} = require('./browser-pitchbar-spacing.cjs');
+const {checkLoopLinks} = require('./browser-loop-links.cjs');
 
 async function main() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'melete-shared-smoke-'));
@@ -49,7 +50,7 @@ async function main() {
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
         const settled = () => page.waitForFunction(() => window.__qa && !__qa.busy &&
-          document.querySelector('#playPause:not(:disabled)') && document.querySelector('#score svg'));
+          document.querySelector('#playPause:not(:disabled)') && document.querySelector('#score svg, #barScore svg'));
         await page.goto(origin);
         await settled();
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), mobile ? '70' : '100');
@@ -174,9 +175,10 @@ async function main() {
         const scrubLabel = await checkScrubLabel(page, page, {mobile});
         const touchRows = await checkTouchRows(page, page, {mobile});
         const partLinks = await checkPartLinks(page, origin, settled, {names});
+        const loopLinks = await checkLoopLinks(page, origin, settled, {mobile, output});
         results.push({viewport: mobile ? 'mobile' : 'desktop', visibilitySubsets: 7, onsetChecks: 4, savedScale: saved,
           fullMeasureRests: {scales:[5,400], count:restLayout.length}, cursorEdges, panHolds, pitchbarSpacing,
-          firstVisit, touchTip, scrubLabel, touchRows, partLinks});
+          firstVisit, touchTip, scrubLabel, touchRows, partLinks, loopLinks});
       } finally { await context.close(); }
     }
     assert.deepEqual(errors, []);

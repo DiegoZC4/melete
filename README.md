@@ -103,6 +103,33 @@ the latest shared player fixes. Already-sent HTML files do not update themselves
 replace or resend them after rebuilding. ZIP downloads can instead be replaced
 with a fresh ZIP. There is no automatic upload or website deployment step.
 
+## Sharing Practice Loops
+
+Add `?loop=19-24` to a player URL to open measures 19 through 23 ready to
+repeat, paused at measure 19. The end is always **exclusive**: playback returns
+to measure 19 when it reaches the beginning of measure 24.
+
+For exact positions, use `measure.beat.fraction`, with one-based measures and
+beats and a decimal fraction of the beat: `19.2.75` is three quarters through
+beat 2 of measure 19. Beats use the written time-signature denominator, so a
+beat in 6/8 is an eighth note. Grace notes do not create extra beats.
+Only include the precision you need: `19`, `19.1`, and `19.1.0` all identify
+the same position. Likewise, `?loop=19.1.0-24.1.0` is identical to `?loop=19-24`.
+Beat-only endpoints such as `19.2` mean `19.2.0`. The start of the next measure
+is also accepted as an end boundary after the final bar. Addresses follow the
+player's displayed measure numbering.
+
+Links can include a part, for example `?part=B2&loop=19-24`. The Autumn/Seed
+collection additionally keeps its song in the hash:
+`https://diegozc.com/autumn-seed/?loop=19-24#the-seed`.
+Hash fields also work: `#the-seed&loop=19-24&part=B2`.
+
+The link changes only the requested loop/part, not the singer's mix or speed.
+Invalid ranges leave the current loop unchanged. Link fields are consumed once;
+the loop is saved per song, so reload preserves later edits or clearing instead
+of reapplying the original link. Clicking the existing Start/End controls still
+sets whole-measure boundaries; holding either clears the loop.
+
 ## Scope And Limits
 
 - This is the reusable shared pipeline, not a bundle of song arrangements or
