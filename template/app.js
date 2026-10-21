@@ -145,6 +145,8 @@
   let pitchCaptureState = "off";
   let microphoneRequest = null;
   let takeState = "off";
+  let takeCountIn = null;
+  let takeCountHideTimer = 0;
   let takeRequestGeneration = 0;
   let takeCapture = null;
   let takeJournal = null;
@@ -252,6 +254,7 @@
     closeTakes: document.getElementById("closeTakes"),
     recordTake: document.getElementById("recordTake"),
     takeStatus: document.getElementById("takeStatus"),
+    takeCountIn: document.getElementById("takeCountIn"),
     takeStorage: document.getElementById("takeStorage"),
     takeList: document.getElementById("takeList"),
     takePreview: document.getElementById("takePreview"),
@@ -4981,6 +4984,8 @@
         this.playing = true;
         this.anchorTime = this.context.currentTime;
         this.onTransportChange?.("play");
+        // A recording listener can cancel an unexpected play during count-in.
+        if (request !== this.startRequest || !this.playing) return;
         this.resetScheduler();
         window.clearInterval(this.timer);
         this.timer = window.setInterval(() => this.update(), SCHEDULER_INTERVAL_MS);
@@ -6976,7 +6981,7 @@
       pitchCaptureContext = new (window.AudioContext || window.webkitAudioContext)({latencyHint: "interactive"});
       new Set([pitchCaptureContext, engine.context]).forEach(context => {
         context.addEventListener("statechange", () => {
-          if (["armed", "recording"].includes(takeState) && context.state !== "running") {
+          if (["counting", "armed", "recording"].includes(takeState) && context.state !== "running") {
             void stopTakeRecording("Stopped: audio interrupted", true);
           }
         });
@@ -7057,11 +7062,14 @@
   function recordingLoopSpec() {
     if (!ready || !engine?.hasLoop()) return null;
     const range = loopTickRange();
-    const seconds = (engine.loopEndSeconds - engine.loopStartSeconds) / engine.rate;
-    if (!Number.isFinite(seconds) || seconds <= 0) return null;
-    const label = `${elements.loopStart.textContent.trim()}-${elements.loopEnd.textContent.trim()}`;
     const part = parts[practicePartIndex]?.short || parts[practicePartIndex]?.name || "voice";
-    return {seconds, label, part, rate: engine.rate, start: range.start, end: range.end};
+    const start = window.MeleteRecording.recordingEntrance(config.recordingEntrances, range, part, loopAddressTick);
+    const seconds = (engine.secondsAtTick(range.end) - engine.secondsAtTick(start)) / engine.rate;
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const address = tick => tick === sequence.endTick ? String(sequence.measures.length + 1)
+      : scoreLocationAtTick(tick).replace(/\.0$/u, "").replace(/\.1$/u, "");
+    const label = `${address(start)}-${address(range.end)}`;
+    return {seconds, label, part, rate: engine.rate, start, end: range.end};
   }
 
   function takeSongKey() { return String(config.slug || config.title || "melete"); }
@@ -7225,6 +7233,7 @@
     let status = takeNotice || (spec ? `${spec.label} · ${formatTime(spec.seconds * 1000)} per pass` : "Set a loop to record");
     if (spec?.seconds > window.MeleteRecording.MAX_LOOP_SECONDS) status = "Choose a loop of 5 minutes or less";
     if (takeState === "requesting") status = "Preparing recording...";
+    if (takeState === "counting") status = `Count in · ${spec?.label || ""}`;
     if (takeState === "armed") status = "Starting loop...";
     if (takeState === "recording") status = `Recording take ${all.find(take => take.active)?.number || "..."}`;
     if (takeState === "stopping") status = "Saving take...";
@@ -7310,6 +7319,11 @@
     if (!pitchCaptureSupported()) { showToast("Microphone recording is unavailable here", "error"); return; }
     stopTakePreview();
     engine.pauseTransport();
+    if (spec.start !== loopTickRange().start) {
+      loopStartMeasure = measureIndexAtTick(spec.start);
+      loopStartTick = spec.start === sequence.measures[loopStartMeasure][0] ? null : spec.start;
+      updateLoopState({persist: true});
+    }
     api.tickPosition = spec.start;
     takeState = "requesting";
     takeNotice = "";
@@ -7339,10 +7353,31 @@
       if (generation !== takeRequestGeneration) { await capture.stop(); syncMicrophoneActivity(); return; }
       takeJournal = journal;
       takeCapture = capture;
-      takeState = "armed";
+      takeState = "counting";
       takeRefreshTimer = window.setInterval(renderTakePanel, 250);
       renderTakePanel();
+      const direction = playbackDirection();
+      if (direction) scrollToPlayback(direction, "auto", true);
+      window.clearTimeout(takeCountHideTimer);
+      elements.takeCountIn.hidden = true;
+      const plan = window.MeleteRecording.countInPlan(sequence.measures, sequence.division,
+        spec.start, tick => engine.secondsAtTick(tick), engine.rate);
+      const countIn = new window.MeleteRecording.CountIn(engine.context, engine.master, plan, beat => {
+        elements.takeCountIn.querySelector("strong").textContent = String(beat.label);
+        elements.takeCountIn.dataset.beat = String(beat.label);
+        elements.takeCountIn.hidden = false;
+        elements.takeCountIn.getAnimations().forEach(animation => animation.cancel());
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          elements.takeCountIn.animate([{opacity: 1}, {opacity: 0.65}], {duration: 280, fill: "forwards"});
+        }
+      });
+      takeCountIn = countIn;
+      const counted = await countIn.done;
+      if (generation !== takeRequestGeneration) return;
+      if (!counted) { await stopTakeRecording("Count-in interrupted", true); return; }
+      takeState = "armed";
       await engine.startTransport();
+      takeCountHideTimer = window.setTimeout(() => { elements.takeCountIn.hidden = true; }, 300);
       if (!takePersistenceRequested && generation === takeRequestGeneration) {
         takePersistenceRequested = true;
         void navigator.storage?.persist?.().then(granted => { takePersistence = granted; renderTakePanel(); }).catch(() => {});
@@ -7364,6 +7399,10 @@
     if (takeState === "off") return Promise.resolve();
     if (takeState === "stopping") return takeStopPromise || Promise.resolve();
     ++takeRequestGeneration;
+    takeCountIn?.cancel();
+    takeCountIn = null;
+    window.clearTimeout(takeCountHideTimer);
+    elements.takeCountIn.hidden = true;
     takeState = "stopping";
     takeNotice = message;
     const journal = takeJournal;
@@ -7401,6 +7440,10 @@
 
   function takeTransportChanged(kind) {
     if (kind === "play") stopTakePreview();
+    if (kind === "play" && ["requesting", "counting"].includes(takeState)) {
+      void stopTakeRecording("Count-in canceled", true);
+      return;
+    }
     if ((kind === "play" && takeState === "armed") || (kind === "loop" && takeState === "recording")) {
       takeState = "recording";
       takeJournal.begin(Math.round(pitchCaptureContext.currentTime * pitchCaptureContext.sampleRate));
@@ -7408,6 +7451,11 @@
     } else if (!["play", "loop"].includes(kind) && takeState !== "off" && takeState !== "stopping") {
       void stopTakeRecording(kind === "pause" ? "Stopped" : "Stopped: playback changed", kind !== "pause");
     }
+  }
+
+  function togglePracticePlayback() {
+    if (["requesting", "counting"].includes(takeState)) void stopTakeRecording("Count-in canceled", true);
+    else engine?.toggleTransport();
   }
 
   function restoreScoreRenderStyleLock() {
@@ -8196,7 +8244,7 @@
   elements.horizontalScale.addEventListener("input", () => { savePreferences(); scheduleRender(); });
   attachHoldReset(elements.loopStart, () => setLoopPoint("start"), clearLoop, "loop");
   attachHoldReset(elements.loopEnd, () => setLoopPoint("end"), clearLoop, "loop");
-  elements.playPause.addEventListener("click", () => engine?.toggleTransport());
+  elements.playPause.addEventListener("click", togglePracticePlayback);
   document.addEventListener("melete:restore-position", event => restorePlaybackPosition(event.detail?.milliseconds));
   document.addEventListener("melete:activate", () => {
     if (ready) initializeMediaSession();
@@ -8302,7 +8350,7 @@
       if (!elements.takePanel.hidden && takePreviewUrl) {
         if (elements.takePreview.paused) void elements.takePreview.play().catch(() => {});
         else elements.takePreview.pause();
-      } else engine?.toggleTransport();
+      } else togglePracticePlayback();
     }
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   }, { capture: true });

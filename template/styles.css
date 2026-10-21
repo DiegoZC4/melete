@@ -510,6 +510,17 @@ button { color: inherit; }
 
 #loopRecorder.is-recording { color: #ed5555; border-color: currentColor; }
 #loopRecorder.has-takes:not(.is-recording) { border-color: var(--accent); }
+.take-count-in {
+  position: fixed; z-index: 790; left: 50%; top: 38%;
+  transform: translate(-50%, -50%); pointer-events: none;
+  width: 112px; height: 124px; display: grid; grid-template-rows: 24px 1fr;
+  padding: 10px; text-align: center; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel-solid); color: var(--ink); box-shadow: 0 4px 18px #0003;
+}
+.take-count-in[hidden] { display: none; }
+.take-count-in span { font-size: 13px; color: var(--muted); }
+.take-count-in strong { font-size: 64px; line-height: 1; font-variant-numeric: tabular-nums; }
 .take-panel {
   position: fixed;
   z-index: 780;

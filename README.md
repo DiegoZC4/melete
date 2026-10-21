@@ -133,7 +133,13 @@ sets whole-measure boundaries; holding either clears the loop.
 ## Record Loop Takes
 
 Set a practice loop, open **Tools > Loop recordings** (circle-dot icon), and
-press **Record loop**. Playback restarts at the loop start. Use headphones:
+press **Record loop**. Three large beat-number cues and clicks count you in at
+the current practice speed, then playback and microphone recording start at the
+loop entrance. The numbers follow the written meter, including fractional
+pickups; an interior starting beat can be the final entry cue (1, 2, enter on 3).
+Only the initial take has a count-in; subsequent passes loop continuously.
+The preparation is not saved as part of a take. Stop or Space cancels the count-in,
+as do changes to the loop, speed, song or selected part. Use headphones:
 the recording contains only the microphone, but speakers can bleed into it.
 Press **Stop**, preview the takes, and download your choice as a mono PCM WAV.
 There is no automatic "best take" ranking or submission/upload.
@@ -175,6 +181,15 @@ the queue. Capture uses an inline AudioWorklet with no network dependencies and
 requires a supported browser with microphone and IndexedDB access (HTTPS or
 localhost recommended). File-origin storage behavior varies by browser; use a
 stable hosted URL for a reliable library location.
+
+Songs can optionally define `recordingEntrances` in their config, for example
+`[{"loop":"19-24","parts":{"S1":"18.7","A2":"19","B2":"19.3"}}]`.
+The recorder uses the selected part's entrance only for that exact audition loop
+(or one of its configured entry variants). The adjusted range is displayed in
+the take panel and applied to the visible loop when Record is pressed. Arbitrary
+custom ranges are unchanged. This is explicit musical content, not a guess from
+voice names or a change to the source score. Take range labels use exclusive ends,
+like the sharing URLs.
 
 ## Scope And Limits
 

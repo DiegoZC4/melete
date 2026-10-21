@@ -269,6 +269,9 @@
       <p class="part-chooser-note" id="partChooserNote"></p>
     </aside>
     <div class="scrub-label" id="scrubLabel" aria-hidden="true" hidden></div>
+    <div class="take-count-in" id="takeCountIn" role="status" aria-live="off" aria-label="Recording count-in" hidden>
+      <span>Count in</span><strong></strong>
+    </div>
     <aside class="take-panel" id="takePanel" role="dialog" aria-modal="false" aria-labelledby="takeTitle" hidden>
       <div class="take-panel-head">
         <strong id="takeTitle">Loop takes</strong>
@@ -282,7 +285,7 @@
       <div class="take-scope">Microphone only · Local autosave · No uploads</div>
       <div class="take-scope" id="takeStorage"></div>
       <div class="take-panel-transport">
-        <button class="take-record" id="recordTake" type="button" title="Restart loop and record microphone; use headphones. Hold to delete unstarred takes.">
+        <button class="take-record" id="recordTake" type="button" title="Count in, then record the loop; use headphones. Hold to delete unstarred takes.">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8"></circle><rect x="5" y="5" width="14" height="14" rx="1"></rect></svg>
           <span>Record loop</span>
         </button>

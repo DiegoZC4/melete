@@ -5,6 +5,11 @@ const {checkLocalTakeFailures} = require('./browser-local-takes.cjs');
 
 const recordingProbe = `
   get takeStore() { return takeStore; },
+  get countIn() { return {beat: elements.takeCountIn.dataset.beat, visible: !elements.takeCountIn.hidden,
+    endTime: takeCountIn?.endTime, now: engine.context?.currentTime, spec: recordingLoopSpec(),
+    captureStartDelay: takeJournal?.buffer.current ? takeJournal.buffer.current.start / pitchCaptureContext.sampleRate
+      - pitchCaptureContext.currentTime + engine.context.currentTime - takeCountIn.endTime : null,
+    cursor: playbackCursorBounds()}; },
   get recording() { return {state: takeState, notice: takeNotice, part: takeJournal?.spec.part,
     ready: takeLibraryReady, capacity: takeJournal?.buffer.passFrames || 0,
     sampleRate: takeJournal?.buffer.sampleRate || allTakes()[0]?.sampleRate || 0,
@@ -24,6 +29,12 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
   await page.locator('#loopRecorder').click();
   assert.equal(await page.locator('#takePanel').isVisible(), true);
   await page.locator('#recordTake').click();
+  await page.waitForFunction(() => __qa.recording.state === 'counting' && __qa.countIn.visible);
+  assert.equal(await page.evaluate(() => __qa.engine.playing), false, 'no score playback during count-in');
+  assert.equal((await page.evaluate(() => __qa.recording)).takes.length, 0, 'count-in creates no throwaway take');
+  await page.screenshot({path: path.join(output, `count-in-${mobile ? 'mobile' : 'desktop'}.png`)});
+  const cue = await page.locator('#takeCountIn').boundingBox(), viewportBefore = page.viewportSize();
+  assert.ok(cue.x >= 0 && cue.y >= 0 && cue.x + cue.width <= viewportBefore.width && cue.y + cue.height <= viewportBefore.height);
   try { await page.waitForFunction(() => __qa.recording.state === 'recording'); }
   catch (error) {
     console.error('Recorder start failure:', await page.evaluate(() => ({...__qa.recording, captureError: __qa.captureError,
@@ -31,6 +42,8 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
     throw error;
   }
   assert.equal(await page.locator('#settingsToggle').evaluate(button => button.classList.contains('has-recording')), true);
+  const counted = await page.evaluate(() => __qa.countIn);
+  assert.ok(counted.now >= counted.endTime && counted.now - counted.endTime < .25, 'first take starts on the count-in boundary');
   await page.waitForFunction(() => __qa.recording.takes.length >= 5 && __qa.recording.takes.at(-1)?.seconds > .2);
   await page.locator('#recordTake').click();
   await page.waitForFunction(() => __qa.recording.state === 'off');
@@ -143,6 +156,19 @@ async function checkLoopRecorder(page, origin, settled, {mobile, output, tempora
 
   // Transport edits retain the interrupted take rather than silently splicing.
   await page.locator('#loopRecorder').click();
+  // A canceled count-in never records silence, resumes late, or saves an empty take.
+  const beforeCancel = (await page.evaluate(() => __qa.recording)).takes.length;
+  for (const action of ['space', 'stop', 'rate']) {
+    await page.locator('#recordTake').click();
+    await page.waitForFunction(() => __qa.recording.state === 'counting' && __qa.countIn.visible);
+    if (action === 'space') await page.keyboard.press('Space');
+    else if (action === 'stop') await page.locator('#recordTake').click();
+    else await page.evaluate(() => __qa.api.playbackSpeed = .8);
+    await page.waitForFunction(() => __qa.recording.state === 'off');
+    await page.waitForTimeout(2100);
+    assert.equal((await page.evaluate(() => __qa.recording)).takes.length, beforeCancel);
+    assert.equal(await page.evaluate(() => __qa.engine.playing || __qa.countIn.visible), false);
+  }
   for (const operation of ['rate', 'seek', 'loop']) {
     await page.locator('#recordTake').click();
     await page.waitForFunction(() => __qa.recording.state === 'recording');

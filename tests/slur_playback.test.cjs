@@ -84,6 +84,16 @@ test('joining slurs preserves every note, and rejects malformed or disconnected 
   assert.ok(e2.notes.every(n=>!n.segments), 'never connect different singers');
 });
 
+test('canceling from a play listener cannot schedule a slur or leave an idle transport timer', async () => {
+  const e = engine();
+  e.basePosition = 1;
+  e.onTransportChange = kind => { if (kind === 'play') e.pauseTransport(); };
+  await e.play();
+  assert.equal(e.playing, false);
+  assert.equal(e.timer, 0);
+  assert.equal(e.scheduled.size, 0);
+});
+
 for (const rate of [.5,1,1.5,2]) test(`one continuous oscillator with 3 ms on-time glides at ${rate}x`, () => {
   const e = engine(); e.rate = rate;
   e.scheduleNote(e.notes[0], 0, .028);

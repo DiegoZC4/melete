@@ -7,6 +7,107 @@
   "use strict";
 
   const MAX_LOOP_SECONDS = 300;
+
+  function countInPlan(measures, division, start, secondsAtTick, rate = 1) {
+    const index = measures.findLastIndex(measure => measure[0] <= start + 1e-6);
+    const measure = measures[Math.max(0, index)];
+    if (!measure || !(division > 0) || !(rate > 0)) throw new Error("Invalid count-in timing");
+    const [barStart, , numerator = 4, denominator = 4] = measure;
+    const beatTicks = division * 4 / denominator;
+    // An interior beat is itself the entry cue (1, 2, enter on 3).
+    // A downbeat gets three preceding beats; fractional pickups keep their offset.
+    const includeEntry = start > barStart + 1e-6;
+    const beats = [];
+    for (let i = Math.max(0, index - 3); i <= Math.max(0, index); i++) {
+      const [tick, duration, count = 4, unit = 4] = measures[i];
+      for (let beat = 0; beat < count; beat++) {
+        const at = tick + beat * division * 4 / unit;
+        if (at >= tick + duration - 1e-6) break;
+        if (at < start - 1e-6 || (includeEntry && Math.abs(at - start) < 1e-6)) {
+          beats.push({tick: at, label: beat + 1});
+        }
+      }
+    }
+    // At the beginning of a piece, supply an imaginary preceding bar.
+    while (beats.length < 3) {
+      const first = beats[0] || {tick: barStart, label: 1};
+      beats.unshift({tick: first.tick - beatTicks, label: first.label === 1 ? numerator : first.label - 1});
+    }
+    const selected = beats.slice(-3);
+    const origin = secondsAtTick(selected[0].tick);
+    const duration = (secondsAtTick(start) - origin) / rate;
+    return {duration, beats: selected.map(beat => ({label: beat.label,
+      seconds: (secondsAtTick(beat.tick) - origin) / rate}))};
+  }
+
+  function recordingEntrance(rules, range, part, addressTick) {
+    for (const rule of rules || []) {
+      const endpoints = String(rule.loop || "").split("-");
+      if (endpoints.length !== 2 || !rule.parts?.[part]) continue;
+      const start = addressTick(endpoints[0]), end = addressTick(endpoints[1], true);
+      const entry = addressTick(rule.parts[part]);
+      const starts = [start, ...Object.values(rule.parts).map(value => addressTick(value))];
+      if (entry !== null && end !== null && entry < end && Math.abs(range.end - end) < 1e-6
+        && starts.some(tick => tick !== null && Math.abs(range.start - tick) < 1e-6)) return entry;
+    }
+    return range.start;
+  }
+
+  class CountIn {
+    constructor(context, destination, plan, onBeat, timers = globalThis) {
+      this.context = context;
+      this.timers = timers;
+      this.nodes = new Set();
+      this.settled = false;
+      this.done = new Promise(resolve => { this.resolve = resolve; });
+      const start = context.currentTime + 0.12;
+      this.endTime = start + plan.duration;
+      plan.beats.forEach(beat => {
+        const at = start + beat.seconds;
+        const oscillator = context.createOscillator(), gain = context.createGain();
+        oscillator.type = "triangle";
+        oscillator.frequency.value = beat.label === 1 ? 1320 : 880;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.16, at + 0.003);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.045);
+        oscillator.connect(gain).connect(destination);
+        const node = {oscillator, gain};
+        this.nodes.add(node);
+        oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); this.nodes.delete(node); };
+        oscillator.start(at);
+        oscillator.stop(at + 0.05);
+      });
+      let displayed = -1;
+      const update = () => {
+        if (this.settled) return;
+        if (context.state !== "running") { this.cancel(); return; }
+        const elapsed = context.currentTime - start;
+        const next = plan.beats.findLastIndex(beat => beat.seconds <= elapsed + 1e-6);
+        if (next >= 0 && next !== displayed) {
+          displayed = next;
+          onBeat(plan.beats[next]);
+        }
+        if (context.currentTime >= this.endTime) {
+          this.settled = true;
+          this.resolve(true);
+        } else this.timer = timers.setTimeout(update, 10);
+      };
+      update();
+    }
+
+    cancel() {
+      this.timers.clearTimeout(this.timer);
+      for (const {oscillator, gain} of this.nodes) {
+        try { oscillator.stop(); } catch {}
+        oscillator.disconnect();
+        gain.disconnect();
+      }
+      this.nodes.clear();
+      this.settled = true;
+      this.resolve(false);
+    }
+  }
+
   class TakeBuffer {
     constructor(sampleRate, seconds) {
       if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MAX_LOOP_SECONDS
@@ -428,5 +529,6 @@
     }
   }
 
-  return {TakeBuffer, TakeStore, TakeJournal, wavBytes, PcmCapture, MAX_LOOP_SECONDS, WORKLET_SOURCE};
+  return {TakeBuffer, TakeStore, TakeJournal, wavBytes, PcmCapture, CountIn, countInPlan,
+    recordingEntrance, MAX_LOOP_SECONDS, WORKLET_SOURCE};
 });
