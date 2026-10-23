@@ -278,12 +278,26 @@
         <button class="icon-button take-star" id="takeFavorites" type="button" aria-label="Show favorites only" aria-pressed="false" title="Show favorites only">
           <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
         </button>
+        <details class="take-actions" id="takeActions">
+          <summary class="icon-button" aria-label="Take actions" title="Take actions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+          </summary>
+          <div class="take-actions-menu">
+            <button type="button" id="downloadFavorites"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"></path></svg><span>Download favorites (ZIP)</span></button>
+            <button type="button" id="deleteUnstarred"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M19 6v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6M8 6V3h8v3M10 10v7M14 10v7"></path></svg><span>Delete unstarred</span></button>
+          </div>
+        </details>
         <button class="icon-button" id="closeTakes" type="button" aria-label="Close loop recordings" title="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6 6 18M6 6l12 12"></path></svg>
         </button>
       </div>
       <div class="take-scope">Microphone only · Local autosave · No uploads</div>
       <div class="take-scope" id="takeStorage"></div>
+      <div class="take-storage-warning" id="takeStorageWarning" hidden>
+        <span id="takeStorageWarningMessage" role="status"></span>
+        <div><button class="take-command" id="takeStorageCleanup" type="button">Review cleanup</button>
+        <button class="take-command" id="takeStorageKeep" type="button">Keep takes</button></div>
+      </div>
       <div class="take-panel-transport">
         <button class="take-record" id="recordTake" type="button" title="Count in, then record the loop; use headphones. Hold to delete unstarred takes.">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8"></circle><rect x="5" y="5" width="14" height="14" rx="1"></rect></svg>
@@ -292,6 +306,10 @@
         <span id="takeStatus" role="status" aria-live="polite">Set a loop to record</span>
       </div>
       <button class="take-command" id="retryTakeSave" type="button" hidden>Retry save</button>
+      <div class="take-undo" id="takeUndo" hidden>
+        <span id="takeUndoMessage" role="status"></span>
+        <button class="take-command" id="undoTakeDelete" type="button">Undo</button>
+      </div>
       <div class="take-delete-prompt" id="takeDeletePrompt" hidden>
         <span id="takeDeleteMessage"></span>
         <button class="take-command" id="cancelTakeDelete" type="button">Cancel</button>

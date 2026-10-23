@@ -1158,6 +1158,7 @@ def third_party_notices(
     lucide_license: str,
     pitchy_license: str,
     fft_license: str,
+    fflate_license: str = "",
 ) -> str:
     return (
         "Melete (original code and documentation)\n"
@@ -1186,7 +1187,10 @@ def third_party_notices(
         f"{pitchy_license.strip()}\n\n"
         "fft.js\n"
         "https://github.com/indutny/fft.js\n\n"
-        f"{fft_license.strip()}\n"
+        f"{fft_license.strip()}\n\n"
+        "fflate 0.8.3\n"
+        "https://github.com/101arrowz/fflate\n\n"
+        f"{fflate_license.strip()}\n"
     )
 
 
@@ -1662,6 +1666,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             VENDOR_DIR / "alphatab" / "font" / "Bravura-OFL.txt"
         )
         lucide_license = read_required(VENDOR_DIR / "lucide" / "LICENSE")
+        fflate = read_required(VENDOR_DIR / "fflate" / "fflate.js")
+        fflate_license = read_required(VENDOR_DIR / "fflate" / "LICENSE")
         assert isinstance(template, str)
         assert isinstance(styles, str)
         assert isinstance(app, str)
@@ -1678,6 +1684,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         app, template, styles = install_compact_lyrics(app, template, styles)
         app = install_system_annotations(app)
         app = read_required(TEMPLATE_DIR / "loop_recorder.js") + "\n" + app
+        app = fflate + "\n" + app
         atomic_write(staged_project / "app.js", app)
         atomic_write(staged_project / "styles.css", styles)
         pitchy = pitchy_browser_runtime(fft_source, pitchy_source)
@@ -1701,6 +1708,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 ("bravura-font", font),
                 ("bravura-license", font_license.encode("utf-8")),
                 ("lucide-license", lucide_license.encode("utf-8")),
+                ("fflate-license", fflate_license.encode("utf-8")),
                 ("score", normalized_xml.encode("utf-8")),
                 ("playback", playback_bytes),
                 ("score-metadata", extracted_bytes),
@@ -1741,6 +1749,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             lucide_license,
             pitchy_license,
             fft_license,
+            fflate_license,
         )
         standalone = render_document(
             template=template,

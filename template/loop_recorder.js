@@ -7,6 +7,53 @@
   "use strict";
 
   const MAX_LOOP_SECONDS = 300;
+  const DELETE_UNDO_MS = 10000;
+  const STORAGE_WARNING_BYTES = 250 * 1024 * 1024;
+
+  function takeBytes(takes) {
+    return takes.reduce((total, take) => total + Math.max(0, take.length ?? take.frames ?? 0) * 2, 0);
+  }
+
+  function takeFilename(song, take) {
+    const safe = value => String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "");
+    return `${safe(song)}-${safe(take.part)}-m${safe(take.label)}-${Math.round(take.rate * 100)}pct-take-${take.number || take.createdAt}${take.complete ? "" : "-partial"}.wav`;
+  }
+
+  async function takeArchive(takes, song, readWav, zipApi, onProgress = () => {}) {
+    if (!takes.length) throw new Error("No favorites to download");
+    // ZIP32 bounds; refuse an oversized archive rather than returning corrupt data.
+    if (takes.length >= 65535 || takeBytes(takes) + takes.length * 2048 >= 0xffffffff) {
+      throw new Error("Favorites are too large for one ZIP; download takes individually");
+    }
+    const chunks = [];
+    let result, failure;
+    const zip = new zipApi.Zip((error, chunk, final) => {
+      if (error) { failure = error; return; }
+      chunks.push(new Blob([chunk]));
+      if (final) result = new Blob(chunks, {type: "application/zip"});
+    });
+    try {
+      for (const [index, take] of takes.entries()) {
+        const wav = await readWav(take);
+        const file = new zipApi.ZipPassThrough(takeFilename(song, take));
+        zip.add(file);
+        const reader = wav.stream().getReader();
+        try {
+          while (true) {
+            const {value, done} = await reader.read();
+            file.push(value || new Uint8Array(0), done);
+            if (failure) throw failure;
+            if (done) break;
+          }
+        } finally { reader.releaseLock(); }
+        onProgress(index + 1, takes.length);
+      }
+      zip.end();
+      if (failure) throw failure;
+      if (!result) throw new Error("ZIP could not be completed");
+      return result;
+    } catch (error) { zip.terminate(); throw error; }
+  }
 
   function countInPlan(measures, division, start, secondsAtTick, rate = 1) {
     const index = measures.findLastIndex(measure => measure[0] <= start + 1e-6);
@@ -234,11 +281,18 @@
       });
     }
 
+    usage() {
+      return this.transaction(["takes"], "readonly", (tx, done) => {
+        tx.objectStore("takes").getAll().onsuccess = event => done(event.target.result);
+      });
+    }
+
     append(record, offset, pcm, status) {
       return this.transaction(["takes", "chunks", "counters"], "readwrite", (tx, done, fail) => {
         const takes = tx.objectStore("takes");
         takes.get(record.id).onsuccess = event => {
           const previous = event.target.result;
+          if (previous?.deleteAfter) { fail(new Error("This take is pending deletion")); return; }
           if ((previous?.frames || 0) !== offset) { fail(new Error("The take changed in another tab")); return; }
           const write = number => {
             const next = {...record, ...previous, ...status, number, frames: offset + pcm.length, updatedAt: Date.now()};
@@ -265,9 +319,62 @@
         takes.get(id).onsuccess = event => {
           const record = event.target.result;
           if (!record) { fail(new Error("This take was deleted in another tab")); return; }
+          if (record.deleteAfter) { fail(new Error("Undo deletion before starring this take")); return; }
           record.favorite = favorite;
           takes.put(record);
           done(record);
+        };
+      });
+    }
+
+    stageDelete(song, id, now = Date.now()) {
+      return this.transaction(["takes"], "readwrite", (tx, done, fail) => {
+        const takes = tx.objectStore("takes");
+        takes.get(id).onsuccess = event => {
+          const record = event.target.result;
+          if (!record || record.song !== song || record.favorite || record.deleteAfter) { done(null); return; }
+          record.deleteAfter = now + DELETE_UNDO_MS;
+          takes.put(record);
+          done(record);
+        };
+      });
+    }
+
+    undoDeletes(song, now = Date.now()) {
+      return this.transaction(["takes"], "readwrite", (tx, done) => {
+        const restored = [];
+        done(restored);
+        tx.objectStore("takes").index("song").openCursor(song).onsuccess = event => {
+          const cursor = event.target.result;
+          if (!cursor) return;
+          const record = cursor.value;
+          if (record.deleteAfter > now) {
+            delete record.deleteAfter;
+            cursor.update(record);
+            restored.push(record);
+          }
+          cursor.continue();
+        };
+      });
+    }
+
+    purgeDeleted(song, now = Date.now()) {
+      return this.transaction(["takes", "chunks"], "readwrite", (tx, done) => {
+        const deleted = [];
+        done(deleted);
+        tx.objectStore("takes").index("song").openCursor(song).onsuccess = event => {
+          const cursor = event.target.result;
+          if (!cursor) return;
+          const record = cursor.value;
+          if (record.deleteAfter && record.deleteAfter <= now && !record.favorite) {
+            deleted.push(record.id);
+            cursor.delete();
+            tx.objectStore("chunks").index("takeId").openCursor(record.id).onsuccess = event => {
+              const chunk = event.target.result;
+              if (chunk) { chunk.delete(); chunk.continue(); }
+            };
+          }
+          cursor.continue();
         };
       });
     }
@@ -530,5 +637,6 @@
   }
 
   return {TakeBuffer, TakeStore, TakeJournal, wavBytes, PcmCapture, CountIn, countInPlan,
-    recordingEntrance, MAX_LOOP_SECONDS, WORKLET_SOURCE};
+    recordingEntrance, takeBytes, takeFilename, takeArchive, DELETE_UNDO_MS, STORAGE_WARNING_BYTES,
+    MAX_LOOP_SECONDS, WORKLET_SOURCE};
 });

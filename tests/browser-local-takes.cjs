@@ -28,14 +28,30 @@ async function checkTakeStore(page) {
       const pcm = Array.from({length: 5}, (_, i) => wav.getInt16(44 + 2 * i, true));
       const foreign = await store.append({...record, id: 'other-song', song: 'two'}, 0, new Int16Array([7]), status);
       const protectedIds = await store.deleteUnstarred('one', ['first', 'other-song']);
+      const protectedStage = await store.stageDelete('one', 'first', 1000);
+      const foreignStage = await store.stageDelete('one', 'other-song', 1000);
       await store.favorite('first', false);
+      const staged = await store.stageDelete('one', 'first', 1000);
+      const earlyPurge = await store.purgeDeleted('one', 10999);
+      const stillReadable = (await store.wav('first')).size;
+      let pendingStar;
+      try { await store.favorite('first', true); } catch (error) { pendingStar = error.message; }
+      const restored = await store.undoDeletes('one', 10999);
+      const restoredPcm = Array.from(new Int16Array((await (await store.wav('first')).arrayBuffer()).slice(44)));
+      await store.stageDelete('one', 'first', 20000);
+      const lateUndo = await store.undoDeletes('one', 30000);
+      const expired = await store.purgeDeleted('one', 30000);
+      const expiredChunks = await store.transaction(['chunks'], 'readonly', (tx, done) => {
+        tx.objectStore('chunks').index('takeId').count('first').onsuccess = event => done(event.target.result);
+      });
       const deleted = await store.deleteUnstarred('one', ['first', 'other-song']);
       const chunks = await store.transaction(['chunks'], 'readonly', (tx, done) => {
         tx.objectStore('chunks').index('takeId').getAll('first').onsuccess = event => done(event.target.result.length);
       });
       const next = await store.append({...record, id: 'next'}, 0, new Int16Array([8]), status);
       return {appended, quota, afterAbort, stale, finalized, pcm, foreign, protectedIds, deleted, chunks,
-        foreignStillPresent: (await store.list('two')).length, next};
+        foreignStillPresent: (await store.list('two')).length, next,
+        protectedStage, foreignStage, staged, earlyPurge, stillReadable, pendingStar, restored, restoredPcm, lateUndo, expired, expiredChunks};
     } finally {
       (await store.open()).close();
       await new Promise((resolve, reject) => {
@@ -58,7 +74,19 @@ async function checkTakeStore(page) {
   assert.equal(result.foreignStillPresent, 1);
   assert.equal(result.foreign.number, 1, 'numbering is per song');
   assert.equal(result.next.number, 2, 'deletion never reuses a take number');
-  return {atomicAbort: true, chunkRoundTrip: true, favoriteProtection: true, songIsolation: true};
+  assert.equal(result.protectedStage, null);
+  assert.equal(result.foreignStage, null);
+  assert.equal(result.staged.deleteAfter, 11000);
+  assert.deepEqual(result.earlyPurge, []);
+  assert.equal(result.stillReadable, 54, 'audio is retained on disk throughout Undo');
+  assert.match(result.pendingStar, /Undo/);
+  assert.equal(result.restored.length, 1);
+  assert.equal(result.restored[0].deleteAfter, undefined);
+  assert.deepEqual(result.restoredPcm, result.pcm);
+  assert.deepEqual(result.lateUndo, []);
+  assert.deepEqual(result.expired, ['first']);
+  assert.equal(result.expiredChunks, 0, 'expiry releases audio chunks, not just the take listing');
+  return {atomicAbort: true, chunkRoundTrip: true, favoriteProtection: true, songIsolation: true, durableUndo: true};
 }
 
 async function openTakes(page) {
@@ -158,8 +186,8 @@ async function checkLocalTakeFailures(page, origin, settled, {mobile, temporary,
   assert.equal((await page.evaluate(() => __qa.recording)).takes.length, recovered.takes.length);
   await page.evaluate(() => {
     navigator.storage.estimate = realEstimate;
-    window.realList = __qa.takeStore.list.bind(__qa.takeStore);
-    __qa.takeStore.list = async () => { throw new DOMException('Test unavailable', 'InvalidStateError'); };
+    window.realUsage = __qa.takeStore.usage.bind(__qa.takeStore);
+    __qa.takeStore.usage = async () => { throw new DOMException('Test unavailable', 'InvalidStateError'); };
   });
   await page.locator('#recordTake').click();
   await page.waitForFunction(() => __qa.recording.state === 'off');
@@ -167,7 +195,7 @@ async function checkLocalTakeFailures(page, origin, settled, {mobile, temporary,
   assert.equal(await page.evaluate(() => quotaGumCalls), 0, 'unavailable storage never silently records in RAM only');
   assert.equal((await page.evaluate(() => __qa.recording)).takes.length, recovered.takes.length);
   await page.evaluate(() => {
-    __qa.takeStore.list = realList;
+    __qa.takeStore.usage = realUsage;
     navigator.mediaDevices.getUserMedia = originalGum;
   });
   await page.locator('#closeTakes').click();
@@ -214,4 +242,4 @@ async function checkLocalTakeFailures(page, origin, settled, {mobile, temporary,
     pagedLibrary: true, optionalMessaging: true, blockedStorageAllowsPractice: true};
 }
 
-module.exports = {checkLocalTakeFailures};
+module.exports = {checkLocalTakeFailures, checkTakeStore};

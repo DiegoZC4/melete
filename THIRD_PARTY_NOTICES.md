@@ -14,6 +14,7 @@ embeds notices in each standalone HTML output.
 | Bravura music font | `vendor/alphatab/font/Bravura.woff2` | [SIL Open Font License 1.1](vendor/alphatab/font/Bravura-OFL.txt); [source](https://github.com/steinbergmedia/bravura) |
 | Pitchy | `vendor/pitchy/index.js` | [MIT](vendor/pitchy/LICENSE); [source](https://github.com/ianprime0509/pitchy) |
 | fft.js | `vendor/fft/fft.js` | [MIT](vendor/fft/LICENSE); [source](https://github.com/indutny/fft.js) |
+| fflate 0.8.3 | `vendor/fflate/fflate.js` | [MIT](vendor/fflate/LICENSE); [source](https://github.com/101arrowz/fflate/tree/v0.8.3); unmodified UMD distribution from `https://cdn.jsdelivr.net/npm/fflate@0.8.3/umd/index.js` |
 | Lucide icons | Inline icon paths in `template/index.html` | [ISC](vendor/lucide/LICENSE); [source](https://github.com/lucide-icons/lucide) |
 | YouTube brand icon | Inline path in `template/index.html` | [Simple Icons source](https://github.com/simple-icons/simple-icons/blob/develop/icons/youtube.svg), [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 
@@ -40,6 +41,8 @@ SHA-256 hashes of the initial shared release:
 181e0e7c4889f9ad57dde0a11988fa61b941617aa499ecdb9dfd4713896c2b19  vendor/alphatab/font/Bravura.woff2
 79b92333cde9ec16798757f73b624abd13522da31e8fab2993c19d319b3bb36e  vendor/pitchy/index.js
 4092b92cec888377666265b724d676628d377d4d5f56b03b76d9c2c27fd061ea  vendor/fft/fft.js
+462ef8041fc970e3615a20a9dd2b2e3047a073b2da729ef4f02b634bba8b7b83  vendor/fflate/fflate.js
+0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551  vendor/fflate/LICENSE
 ```
 
 No choir repertoire, recordings, private scores or arrangement exports are

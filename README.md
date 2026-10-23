@@ -152,6 +152,22 @@ always kept. Unstar a favorite before deleting it. The library shows each take's
 part, loop, speed, date, and Complete/Partial status, and loads only its metadata
 until you preview or download it.
 
+The take panel's **Take actions** menu also offers **Delete unstarred**, with a
+confirmation showing the space reclaimed for this song, and **Download favorites
+(ZIP)**. ZIP exports contain the original mono WAVs with part, loop, speed and
+take-number filenames; they do not delete the local copies or upload anything.
+An individual saved-take deletion offers **Undo** for 10 seconds. The audio stays
+on disk until that deadline, and Undo remains available after a reload within the
+window. Expired explicit deletions finish when the library next opens if the page
+was closed. Bulk cleanup is permanent after confirmation. Unsaved-take deletion
+requires a separate confirmation because its unsaved tail cannot be restored
+after closing the page.
+
+At 250 MB of recordings across this site's songs, a nonblocking warning offers
+**Review cleanup** or **Keep takes**. Keeping takes defers the warning for another
+250 MB during this visit; it never deletes audio or imposes a take-count limit.
+This is an approximate PCM size, not a promise of remaining browser quota.
+
 Seeking, changing the loop or speed, hiding the tab, switching songs, and audio
 interruptions stop recording without erasing saved takes. A stopped mid-pass take
 is labeled Partial. Sing and the recorder can use the same microphone independently.

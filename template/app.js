@@ -161,6 +161,9 @@
   let takeVisibleCount = 25;
   let takeActionBusy = false;
   let takeDeleteIds = [];
+  let takeDeleteTimer = 0;
+  let takeOtherBytes = 0;
+  let takeStorageWarningAt = window.MeleteRecording.STORAGE_WARNING_BYTES;
   let takePreviewId = null;
   let takePreviewGeneration = 0;
   let takeRefreshTimer = 0;
@@ -263,6 +266,16 @@
     retryTakeSave: document.getElementById("retryTakeSave"),
     takeDeletePrompt: document.getElementById("takeDeletePrompt"),
     takeDeleteMessage: document.getElementById("takeDeleteMessage"),
+    takeActions: document.getElementById("takeActions"),
+    downloadFavorites: document.getElementById("downloadFavorites"),
+    deleteUnstarred: document.getElementById("deleteUnstarred"),
+    takeStorageWarning: document.getElementById("takeStorageWarning"),
+    takeStorageWarningMessage: document.getElementById("takeStorageWarningMessage"),
+    takeStorageCleanup: document.getElementById("takeStorageCleanup"),
+    takeStorageKeep: document.getElementById("takeStorageKeep"),
+    takeUndo: document.getElementById("takeUndo"),
+    takeUndoMessage: document.getElementById("takeUndoMessage"),
+    undoTakeDelete: document.getElementById("undoTakeDelete"),
     confirmTakeDelete: document.getElementById("confirmTakeDelete"),
     cancelTakeDelete: document.getElementById("cancelTakeDelete"),
   };
@@ -7074,11 +7087,27 @@
 
   function takeSongKey() { return String(config.slug || config.title || "melete"); }
 
-  function allTakes() {
+  function allTakes(includeDeleted = false) {
     const merged = new Map([...takeLibrary].map(([id, record]) => [id, {...record,
       length: record.frames, seconds: record.frames / record.sampleRate, active: false, unsaved: false}]));
     for (const record of takeJournal?.views() || []) merged.set(record.id, record);
-    return [...merged.values()].sort((a, b) => b.createdAt - a.createdAt || (b.number || 0) - (a.number || 0));
+    return [...merged.values()].filter(take => includeDeleted || !take.deleteAfter)
+      .sort((a, b) => b.createdAt - a.createdAt || (b.number || 0) - (a.number || 0));
+  }
+
+  function takeSizeLabel(bytes) { return `${(bytes / 1048576).toFixed(1)} MB`; }
+
+  function scheduleTakeDeletion() {
+    window.clearTimeout(takeDeleteTimer);
+    const pending = [...takeLibrary.values()].filter(take => take.deleteAfter);
+    if (!pending.length) return;
+    const deadline = Math.min(...pending.map(take => take.deleteAfter));
+    takeDeleteTimer = window.setTimeout(() => {
+      void loadTakeLibrary().then(announceTakeChange).catch(() => {
+        takeNotice = "Deletion could not finish; audio was kept. Reopen takes to retry.";
+        renderTakePanel();
+      });
+    }, Math.max(50, deadline - Date.now() + 20));
   }
 
   function announceTakeChange() { takeChannel?.postMessage({song: takeSongKey()}); }
@@ -7086,15 +7115,19 @@
   async function loadTakeLibrary() {
     if (takeLibraryRequest) return takeLibraryRequest;
     takeLibraryRequest = (async () => {
-      const records = await takeStore.list(takeSongKey());
+      await takeStore.purgeDeleted(takeSongKey());
+      const library = await takeStore.usage();
+      const records = library.filter(record => record.song === takeSongKey());
+      takeOtherBytes = window.MeleteRecording.takeBytes(library.filter(record => record.song !== takeSongKey()));
       takeLibrary = new Map(records.map(record => [record.id, record]));
+      scheduleTakeDeletion();
       takeLibraryReady = true;
       try { takePersistence = await navigator.storage?.persisted?.() || false; } catch {}
       if (!takeChannel && typeof BroadcastChannel !== "undefined") {
         try {
           takeChannel = new BroadcastChannel("melete-audio-takes-v1");
           takeChannel.onmessage = event => {
-            if (event.data?.song === takeSongKey()) void loadTakeLibrary().catch(() => {});
+            if (event.data?.song) void loadTakeLibrary().catch(() => {});
           };
         } catch {} // Cross-tab refresh is optional; local saving is not.
       }
@@ -7160,18 +7193,84 @@
     if (takeState !== "off") return;
     const take = allTakes().find(item => item.id === id);
     if (!take?.length) return;
-    const safe = value => String(value).replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "");
     try {
-      const url = URL.createObjectURL(await takeBlob(take));
-      const link = document.createElement("a");
-      const partial = take.complete ? "" : "-partial";
-      link.href = url;
-      link.download = `${safe(config.slug || config.title)}-${safe(take.part)}-m${safe(take.label)}-${Math.round(take.rate * 100)}pct-take-${take.number || take.createdAt}${partial}.wav`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+      downloadTakeBlob(await takeBlob(take), window.MeleteRecording.takeFilename(config.slug || config.title, take));
     } catch { showToast("Could not read the stored take", "error"); }
+  }
+
+  function downloadTakeBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  async function downloadFavoriteTakes() {
+    if (takeState !== "off" || takeActionBusy) return;
+    const favorites = allTakes().filter(take => take.favorite);
+    if (!favorites.length || favorites.some(take => take.unsaved)) return;
+    takeActionBusy = true;
+    elements.takeActions.open = false;
+    takeNotice = `Preparing favorites: 0/${favorites.length}`;
+    renderTakePanel();
+    try {
+      const blob = await window.MeleteRecording.takeArchive(favorites, config.slug || config.title,
+        take => takeBlob(take), window.fflate, (done, total) => {
+          takeNotice = `Preparing favorites: ${done}/${total}`;
+          renderTakePanel();
+        });
+      const name = String(config.slug || "melete").replace(/[^a-z0-9_-]+/gi, "-");
+      downloadTakeBlob(blob, `${name}-favorites.zip`);
+      takeNotice = "Favorites ZIP prepared. Local takes kept.";
+    } catch (error) {
+      takeNotice = "Favorites ZIP failed. All local takes were kept.";
+      showToast(error.message || takeNotice, "error");
+    } finally { takeActionBusy = false; renderTakePanel(); }
+  }
+
+  async function removeTake(id) {
+    if (takeState !== "off" || takeActionBusy) return;
+    const take = allTakes().find(take => take.id === id);
+    if (!take || take.favorite) return;
+    if (take.unsaved) {
+      takeDeleteIds = [id];
+      elements.takeDeleteMessage.textContent = "Delete this unsaved take? This cannot be undone. Download it first to keep a copy.";
+      elements.confirmTakeDelete.textContent = "Delete unsaved take";
+      elements.takeDeletePrompt.hidden = false;
+      elements.cancelTakeDelete.focus();
+      return;
+    }
+    takeActionBusy = true;
+    renderTakePanel();
+    try {
+      const record = await takeStore.stageDelete(takeSongKey(), id);
+      if (record) {
+        takeLibrary.set(id, record);
+        if (takePreviewId === id) stopTakePreview();
+        scheduleTakeDeletion();
+        announceTakeChange();
+        takeNotice = "";
+      } else await loadTakeLibrary();
+    } catch (error) { showToast(error.message || "Could not delete take; audio was kept", "error"); }
+    finally { takeActionBusy = false; renderTakePanel(); }
+  }
+
+  async function undoTakeDeletion() {
+    if (takeActionBusy) return;
+    takeActionBusy = true;
+    renderTakePanel();
+    try {
+      const restored = await takeStore.undoDeletes(takeSongKey());
+      restored.forEach(take => takeLibrary.set(take.id, take));
+      takeNotice = restored.length ? `${restored.length} take${restored.length === 1 ? "" : "s"} restored` : "Undo period has ended";
+      scheduleTakeDeletion();
+      announceTakeChange();
+    } catch { showToast("Could not undo deletion; retry before the undo period ends", "error"); }
+    finally { takeActionBusy = false; renderTakePanel(); }
   }
 
   async function starTake(id) {
@@ -7238,11 +7337,23 @@
     if (takeState === "recording") status = `Recording take ${all.find(take => take.active)?.number || "..."}`;
     if (takeState === "stopping") status = "Saving take...";
     if (elements.takeStatus.textContent !== status) elements.takeStatus.textContent = status;
-    const bytes = all.reduce((total, take) => total + take.length * 2, 0);
+    const bytes = window.MeleteRecording.takeBytes(allTakes(true));
+    const totalBytes = bytes + takeOtherBytes;
     elements.takeStorage.textContent = takeLibraryReady
-      ? `${all.length} take${all.length === 1 ? "" : "s"} · ${(bytes / 1048576).toFixed(1)} MB · ${takePersistence ? "Persistent storage" : "This browser"}`
+      ? `${all.length} take${all.length === 1 ? "" : "s"} · ${takeSizeLabel(bytes)} · ${takePersistence ? "Persistent storage" : "This browser"}`
       : "Local storage not loaded";
     elements.takeStorage.title = "Recordings stay on this device. Browser data can be cleared; download important takes.";
+    const favorites = all.filter(take => take.favorite);
+    const unwanted = all.filter(take => !take.favorite);
+    elements.downloadFavorites.disabled = active || takeActionBusy || !favorites.length || favorites.some(take => take.unsaved);
+    elements.deleteUnstarred.disabled = takeActionBusy || !unwanted.length;
+    elements.takeStorageWarning.hidden = !takeLibraryReady || totalBytes < takeStorageWarningAt;
+    elements.takeStorageWarningMessage.textContent = `Recordings use ${takeSizeLabel(totalBytes)} across this site's songs. Nothing is deleted automatically.`;
+    elements.takeStorageCleanup.disabled = takeActionBusy || !unwanted.length;
+    const deleted = [...takeLibrary.values()].filter(take => take.deleteAfter);
+    elements.takeUndo.hidden = !deleted.length;
+    elements.takeUndoMessage.textContent = `${deleted.length} take${deleted.length === 1 ? "" : "s"} deleted`;
+    elements.undoTakeDelete.disabled = takeActionBusy || !deleted.some(take => take.deleteAfter > Date.now());
     elements.takeFavorites.setAttribute("aria-pressed", String(takeFavoritesOnly));
     elements.retryTakeSave.hidden = active || !pending;
     elements.retryTakeSave.disabled = takeActionBusy;
@@ -7267,7 +7378,7 @@
         star.addEventListener("click", () => { void starTake(take.id); });
         preview.addEventListener("click", () => { void previewTake(take.id); });
         download.addEventListener("click", () => { void downloadTake(take.id); });
-        remove.addEventListener("click", () => { void deleteTakes([take.id]); });
+        remove.addEventListener("click", () => { void removeTake(take.id); });
         return row;
       }));
     }
@@ -7306,6 +7417,7 @@
       });
       elements.recordTake.focus();
     } else {
+      elements.takeActions.open = false;
       stopTakePreview();
       elements.loopRecorder.focus();
     }
@@ -7432,7 +7544,10 @@
     takeDeleteIds = allTakes().filter(take => !take.favorite).map(take => take.id);
     if (!takeDeleteIds.length) { takeNotice = "No unstarred takes to delete"; renderTakePanel(); return; }
     showTakePanel();
-    elements.takeDeleteMessage.textContent = `Delete ${takeDeleteIds.length} unstarred take${takeDeleteIds.length === 1 ? "" : "s"}? Favorites are kept.`;
+    elements.takeActions.open = false;
+    const bytes = window.MeleteRecording.takeBytes(allTakes().filter(take => takeDeleteIds.includes(take.id)));
+    elements.takeDeleteMessage.textContent = `Permanently delete ${takeDeleteIds.length} unstarred take${takeDeleteIds.length === 1 ? "" : "s"} from this song and free ${takeSizeLabel(bytes)}? Favorites are kept.`;
+    elements.confirmTakeDelete.textContent = "Delete unstarred";
     elements.takeDeletePrompt.hidden = false;
     elements.cancelTakeDelete.focus();
     renderTakePanel();
@@ -8217,6 +8332,17 @@
     renderTakePanel();
   });
   elements.takeMore.addEventListener("click", () => { takeVisibleCount += 25; renderTakePanel(); });
+  elements.downloadFavorites.addEventListener("click", () => { void downloadFavoriteTakes(); });
+  elements.deleteUnstarred.addEventListener("click", () => { void clearTakes(); });
+  elements.undoTakeDelete.addEventListener("click", () => { void undoTakeDeletion(); });
+  elements.takeStorageCleanup.addEventListener("click", () => { void clearTakes(); });
+  elements.takeStorageKeep.addEventListener("click", () => {
+    takeStorageWarningAt = takeOtherBytes + window.MeleteRecording.takeBytes(allTakes(true)) + window.MeleteRecording.STORAGE_WARNING_BYTES;
+    renderTakePanel();
+  });
+  document.addEventListener("click", event => {
+    if (!elements.takeActions.contains(event.target)) elements.takeActions.open = false;
+  });
   elements.retryTakeSave.addEventListener("click", () => { void retryTakeSave(); });
   elements.cancelTakeDelete.addEventListener("click", () => { takeDeleteIds = []; elements.takeDeletePrompt.hidden = true; });
   elements.confirmTakeDelete.addEventListener("click", () => {
@@ -8229,6 +8355,11 @@
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape" || elements.takePanel.hidden) return;
     event.preventDefault();
+    if (elements.takeActions.open) {
+      elements.takeActions.open = false;
+      elements.takeActions.querySelector("summary").focus();
+      return;
+    }
     showTakePanel(false);
   });
   elements.tempo.addEventListener("input", () => {
