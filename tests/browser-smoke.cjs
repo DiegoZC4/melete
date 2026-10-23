@@ -10,6 +10,7 @@ const {chromium} = require(process.env.GUI_QA_NODE_MODULES
 const {checkMeasureRests} = require('./browser-rest-layout.cjs');
 const {checkCursorEdges} = require('./browser-cursor-layout.cjs');
 const {checkPanHolds} = require('./browser-pan-hold.cjs');
+const {checkVolumeDrag, checkBoostedAudio} = require('./browser-volume-drag.cjs');
 const {checkFirstVisit, checkTouchVolumeTip, checkPartLinks, checkTouchRows, checkScrubLabel} = require('./browser-onboarding.cjs');
 const {pitchbarProbe, checkPitchbarSpacing} = require('./browser-pitchbar-spacing.cjs');
 const {checkLoopLinks} = require('./browser-loop-links.cjs');
@@ -165,6 +166,11 @@ async function main() {
         // Explicit scale choices survive reload instead of being overwritten by responsive defaults.
         if (mobile) await page.locator('#settingsToggle').click();
         const panHolds = await checkPanHolds(page, page, mobile, '__qa');
+        const volumeDrag = await checkVolumeDrag(page, page, mobile, '__qa',
+          path.join(output, `volume-${mobile ? 'mobile' : 'desktop'}.png`));
+        const boostedAudio = await checkBoostedAudio(page, '__qa');
+        const savedVolumes = await page.locator('[data-volume-index]').evaluateAll(nodes => nodes.map(node => Number(node.dataset.value)));
+        await page.locator('[data-volume-index="0"]').press('End');
         await page.locator('[data-pan-index="1"]').press('Shift+Enter');
         assert.deepEqual(await page.locator('[data-pan-index]').evaluateAll(nodes => nodes.map(node => Number(node.dataset.value))),
           [-100, 100, -100], 'separation is active before the persistence check');
@@ -177,6 +183,11 @@ async function main() {
         assert.ok(storedMixes.some(pans => JSON.stringify(pans) === '[-100,100,-100]'),
           `pan separation is saved (${mobile ? 'mobile' : 'desktop'}): ${JSON.stringify(storedMixes)}`);
         await page.reload(); await settled();
+        assert.equal(await page.locator('[data-volume-index="0"]').getAttribute('data-value'), '200', 'boost survives reload');
+        await page.evaluate(savedVolumes => {
+          const state = __qa.pitchbar.captureSettingsState(); state.volumes = savedVolumes;
+          __qa.pitchbar.applySettingsState(state);
+        }, savedVolumes);
         assert.equal(await page.locator('#verticalScale').getAttribute('data-value'), saved);
         assert.equal(await page.locator('#partChooser').isVisible(), false, 'an answered chooser is not asked again');
         assert.equal(await page.locator('#practicePart').getAttribute('data-value'), '1');
@@ -197,7 +208,7 @@ async function main() {
         const loopLinks = await checkLoopLinks(page, origin, settled, {mobile, output});
         const loopRecorder = await checkLoopRecorder(page, origin, settled, {mobile, output, temporary});
         results.push({viewport: mobile ? 'mobile' : 'desktop', visibilitySubsets: 7, onsetChecks: 4, savedScale: saved,
-          fullMeasureRests: {scales:[5,400], count:restLayout.length}, cursorEdges, panHolds, pitchbarSpacing,
+          fullMeasureRests: {scales:[5,400], count:restLayout.length}, cursorEdges, panHolds, volumeDrag, boostedAudio, pitchbarSpacing,
           firstVisit, touchTip, scrubLabel, touchRows, partLinks, loopLinks, loopRecorder});
       } finally { await context.close(); }
     }

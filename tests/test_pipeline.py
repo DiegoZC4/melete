@@ -794,7 +794,7 @@ console.log(JSON.stringify({
     def test_volume_row_label_rides_every_part_together(self) -> None:
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "template" / "styles.css").read_text(encoding="utf-8")
-        self.assertIn("attachGroupDrag(volumeLabel, volumeControls, VOLUME_VALUES, 4);", app)
+        self.assertIn("attachGroupDrag(volumeLabel, volumeControls, VOLUME_VALUES, 4, { clampIndividually: true });", app)
         self.assertIn('volumeLabel.classList.add("is-group-drag");', app)
         self.assertIn('volumeLabel.setAttribute("aria-label", "All part volumes");', app)
         label_rule = styles.split(".mixer-row-label.is-group-drag {", 1)[1].split("}", 1)[0]
@@ -809,7 +809,8 @@ console.log(JSON.stringify({
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 {app[helper:helper_end]}
 {app[start:end]}
-const VALUES = Array.from({{ length: 31 }}, (_, i) => i * 5);   // 0..150 by 5
+{next(line for line in app.splitlines() if 'const VOLUME_VALUES =' in line)}
+const VALUES = VOLUME_VALUES;
 const handlers = {{}};
 const label = {{
   addEventListener: (type, fn) => {{ handlers[type] = fn; }},
@@ -819,7 +820,7 @@ const label = {{
 }};
 const make = (start) => {{ let v = start; return {{ value: () => v, setValue: (next) => {{ v = next; }} }}; }};
 const controls = [make(100), make(60), make(90), make(40)];
-attachGroupDrag(label, controls, VALUES, 4);
+attachGroupDrag(label, controls, VALUES, 4, {{ clampIndividually: true }});
 const read = () => controls.map((c) => c.value());
 const drag = (dy) => {{ handlers.pointermove({{ pointerId: 1, clientY: 200 - dy }}); return read(); }};
 handlers.pointerdown({{ button: 0, pointerId: 1, clientY: 200, preventDefault() {{}} }});
@@ -827,9 +828,16 @@ const out = {{
   start: read(),
   upTwoSteps: drag(8),
   upTenSteps: drag(40),
-  pinnedByTheLoudestPart: drag(400),
+  loudestSaturated: drag(80),
+  othersKeepMoving: drag(96),
+  allAtCeiling: drag(400),
+  backFromOvershoot: drag(88),
   backToStart: drag(0),
-  pinnedByTheQuietestPart: drag(-400),
+  quietestSaturated: drag(-48),
+  allSilent: drag(-400),
+  backFromFloor: drag(-40),
+  restored: drag(0),
+  ignoresHorizontal: (() => {{ handlers.pointermove({{ pointerId: 1, clientY: 200, clientX: 999 }}); return read(); }})(),
 }};
 handlers.pointerup({{ pointerId: 1 }});
 handlers.keydown({{ key: "ArrowUp", preventDefault() {{}} }});
@@ -838,6 +846,15 @@ handlers.keydown({{ key: "ArrowDown", preventDefault() {{}} }});
 out.afterArrowDown = read();
 handlers.keydown({{ key: "a", preventDefault() {{}} }});
 out.afterUnrelatedKey = read();
+controls.forEach((control, i) => control.setValue([200, 0, 195, 5][i]));
+handlers.keydown({{ key: "ArrowUp", preventDefault() {{}} }});
+out.arrowPastCeiling = read();
+handlers.keydown({{ key: "ArrowDown", preventDefault() {{}} }});
+out.arrowPastFloor = read();
+handlers.pointerdown({{ button: 0, pointerId: 2, clientY: 200, preventDefault() {{}} }});
+handlers.pointercancel({{ pointerId: 2 }});
+handlers.pointermove({{ pointerId: 2, clientY: 0 }});
+out.afterCancel = read();
 console.log(JSON.stringify(out));
 """
         result = subprocess.run(
@@ -850,21 +867,23 @@ console.log(JSON.stringify(out));
         self.assertEqual(got["start"], [100, 60, 90, 40])
         self.assertEqual(got["upTwoSteps"], [110, 70, 100, 50])
         self.assertEqual(got["upTenSteps"], [150, 110, 140, 90])
-        # The loudest part reaches 150 first and the shift stops there, so the
-        # spread between parts is never squashed.
-        self.assertEqual(got["pinnedByTheLoudestPart"], [150, 110, 140, 90])
-        self.assertEqual(got["pinnedByTheQuietestPart"], [60, 20, 50, 0])
+        self.assertEqual(got["loudestSaturated"], [200, 160, 190, 140])
+        self.assertEqual(got["othersKeepMoving"], [200, 180, 200, 160])
+        self.assertEqual(got["allAtCeiling"], [200, 200, 200, 200])
+        self.assertEqual(got["backFromOvershoot"], [200, 170, 200, 150])
+        self.assertEqual(got["quietestSaturated"], [40, 0, 30, 0])
+        self.assertEqual(got["allSilent"], [0, 0, 0, 0])
+        self.assertEqual(got["backFromFloor"], [50, 10, 40, 0])
         # Returning to where the drag began restores the mix exactly.
         self.assertEqual(got["backToStart"], [100, 60, 90, 40])
-        for state in ("upTwoSteps", "upTenSteps", "pinnedByTheLoudestPart", "pinnedByTheQuietestPart"):
-            self.assertEqual(
-                [v - got[state][0] for v in got[state]],
-                [0, -40, -10, -60],
-                f"{state} changed the balance between parts",
-            )
-        self.assertEqual(got["afterArrowUp"], [65, 25, 55, 5])
-        self.assertEqual(got["afterArrowDown"], [60, 20, 50, 0])
-        self.assertEqual(got["afterUnrelatedKey"], [60, 20, 50, 0])
+        self.assertEqual(got["restored"], [100, 60, 90, 40])
+        self.assertEqual(got["ignoresHorizontal"], [100, 60, 90, 40])
+        self.assertEqual(got["afterArrowUp"], [105, 65, 95, 45])
+        self.assertEqual(got["afterArrowDown"], [100, 60, 90, 40])
+        self.assertEqual(got["afterUnrelatedKey"], [100, 60, 90, 40])
+        self.assertEqual(got["arrowPastCeiling"], [200, 5, 200, 10])
+        self.assertEqual(got["arrowPastFloor"], [195, 0, 195, 5])
+        self.assertEqual(got["afterCancel"], [195, 0, 195, 5])
 
     def test_practice_choice_reset_retains_snapshot_but_volume_cycle_normalizes(self) -> None:
         app = (ROOT / "template" / "app.js").read_text(encoding="utf-8")

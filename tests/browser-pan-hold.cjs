@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {withMixerSignal} = require('./browser-mixer-signal.cjs');
 
 async function checkPanHolds(surface, page, mobile, probe) {
   const pans = surface.locator('#mixer [data-pan-index]');
@@ -36,8 +37,9 @@ async function checkPanHolds(surface, page, mobile, probe) {
   assert.deepEqual(await values(), separated(1));
   assert.match(await pans.nth(1).getAttribute('title'), /Hold to center all parts/);
   try {
-    await surface.waitForFunction(({probe, values}) => window[probe].engine.trackStrips.every((strip, index) =>
-      !strip.panner || Math.abs(strip.panner.pan.value - values[index] / 100) < .01), {probe, values: separated(1)});
+    await withMixerSignal(surface, probe, () => surface.waitForFunction(({probe, values}) =>
+      window[probe].engine.trackStrips.every((strip, index) =>
+        !strip.panner || Math.abs(strip.panner.pan.value - values[index] / 100) < .01), {probe, values: separated(1)}));
   } catch (error) {
     const state = await surface.evaluate(probe => ({
       context: window[probe].engine.context?.state,

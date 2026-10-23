@@ -1882,7 +1882,7 @@ textarea:focus-visible {
   .mixer { --toolbar-row-height: 36px; }
   .part-heading { font-size: 0.72rem; }
   .mixer-row-label { font-size: 0.7rem; }
-  .mixer .drag-number { font-size: 0.7rem; }
+  .mixer .drag-number { font-size: 0.7rem; padding-inline: 0; }
   .matrix-cell::after { width: 11px; height: 11px; }
   .pan-arc { width: 25px; height: 25px; }
   .pan-cap::after { top: 11px; left: 11px; }

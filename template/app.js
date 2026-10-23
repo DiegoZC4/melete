@@ -21,7 +21,7 @@
     220, 240, 260, 280, 300, 320, 340, 360, 380, 400]);
   const HORIZONTAL_VALUES = Object.freeze(Array.from({ length: 80 }, (_, index) => (index + 1) * 5));
   const PITCH_BAR_UNIT_WIDTH = 16;
-  const VOLUME_VALUES = Object.freeze(Array.from({ length: 31 }, (_, index) => index * 5));
+  const VOLUME_VALUES = Object.freeze(Array.from({ length: 41 }, (_, index) => index * 5));
   const PAN_VALUES = Object.freeze(Array.from({ length: 41 }, (_, index) => index * 5 - 100));
   const METRONOME_VALUES = Object.freeze(Array.from({ length: 11 }, (_, index) => index * 10));
   const PITCH_CONFIDENCE_THRESHOLD = 0.7;
@@ -2034,7 +2034,7 @@
       scoreView: defaults.scoreView === "bars" ? "bars" : "standard",
       lyrics: defaults.lyrics === "changes" ? "changes" : "full",
       practicePart,
-      volumes: parts.map((_, index) => nearestAllowed(clamp(Number(defaults.volumes?.[index] ?? 100), 0, 150), VOLUME_VALUES)),
+      volumes: parts.map((_, index) => nearestAllowed(clamp(Number(defaults.volumes?.[index] ?? 100), 0, VOLUME_VALUES.at(-1)), VOLUME_VALUES)),
       pans: parts.map((_, index) => nearestAllowed(clamp(Number(defaults.pans?.[index] ?? 0), -100, 100), PAN_VALUES)),
     };
   }
@@ -2107,7 +2107,7 @@
     if (!visibleTracks.size && parts.length) visibleTracks.add(0);
     audibleTracks.clear();
     state.audible.forEach((audible, index) => { if (audible) audibleTracks.add(index); });
-    trackVolumes = state.volumes.map((value) => nearestAllowed(clamp(Number(value), 0, 150), VOLUME_VALUES));
+    trackVolumes = state.volumes.map((value) => nearestAllowed(clamp(Number(value), 0, VOLUME_VALUES.at(-1)), VOLUME_VALUES));
     trackPans = state.pans.map((value) => nearestAllowed(clamp(Number(value), -100, 100), PAN_VALUES));
     practicePartIndex = Number.isInteger(state.practicePart) ? state.practicePart : null;
     practiceDivisi = normalizePracticeDivisi(state.practiceDivisi);
@@ -2448,7 +2448,7 @@
       stored.audible.forEach((value, index) => { if (value) audibleTracks.add(index); });
     }
     if (Array.isArray(stored.volumes) && stored.volumes.length === parts.length) {
-      trackVolumes = stored.volumes.map((value) => nearestAllowed(clamp(Number(value) || 0, 0, 150), VOLUME_VALUES));
+      trackVolumes = stored.volumes.map((value) => nearestAllowed(clamp(Number(value) || 0, 0, VOLUME_VALUES.at(-1)), VOLUME_VALUES));
     }
     if (Array.isArray(stored.pans) && stored.pans.length === parts.length) {
       trackPans = stored.pans.map((value) => nearestAllowed(clamp(Number(value) || 0, -100, 100), PAN_VALUES));
@@ -2664,7 +2664,7 @@
       || !value.volumes.every((item) => Number.isFinite(Number(item)))) return null;
     return {
       audible: [...value.audible],
-      volumes: value.volumes.map((item) => nearestAllowed(clamp(Number(item), 0, 150), VOLUME_VALUES)),
+      volumes: value.volumes.map((item) => nearestAllowed(clamp(Number(item), 0, VOLUME_VALUES.at(-1)), VOLUME_VALUES)),
     };
   }
 
@@ -3208,7 +3208,7 @@
   }
 
   // Always measure from the drag's starting mix so reversing restores it.
-  // Volumes preserve their spacing at the limits; pans can saturate separately.
+  // Independent clamping preserves each part's original saturation point.
   function attachGroupDrag(label, controls, values, pixelsPerStep, { horizontal = false, clampIndividually = false } = {}) {
     const along = (event) => horizontal ? event.clientX : -event.clientY;
     const indicesNow = () => controls.map((control) => values.indexOf(nearestAllowed(control.value(), values)));
@@ -3341,7 +3341,7 @@
       }, { holdToReset: false });
       volumeControls.push(control);
     });
-    attachGroupDrag(volumeLabel, volumeControls, VOLUME_VALUES, 4);
+    attachGroupDrag(volumeLabel, volumeControls, VOLUME_VALUES, 4, { clampIndividually: true });
 
     const panLabel = appendMixerLabel("Pan", (state, defaults) => { state.pans = [...defaults.pans]; });
     panLabel.classList.add("is-group-drag", "is-horizontal");
@@ -5108,7 +5108,7 @@
       if (!this.context || !this.trackStrips.length) return;
       const now = this.context.currentTime;
       this.trackStrips.forEach((strip, index) => {
-        const target = audible.has(index) ? clamp((Number(volumes[index]) || 0) / 100, 0, 1.5) : 0;
+        const target = audible.has(index) ? clamp((Number(volumes[index]) || 0) / 100, 0, VOLUME_VALUES.at(-1) / 100) : 0;
         strip.gain.gain.cancelScheduledValues(now);
         if (immediate) strip.gain.gain.setValueAtTime(target, now);
         else strip.gain.gain.setTargetAtTime(target, now, 0.012);

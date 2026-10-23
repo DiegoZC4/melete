@@ -33,7 +33,7 @@ function mixFixture() {
     activePracticeMix: null, practiceMixPartIndex: null, practiceMixUndo: null,
     audibleTracks: new Set([0, 2, 3]), trackVolumes: [85, 70, 110, 45],
     volumeControls: [], elements: {practicePart: {focus() {}}},
-    VOLUME_VALUES: Array.from({length: 31}, (_, i) => i * 5),
+    VOLUME_VALUES: Array.from({length: 41}, (_, i) => i * 5),
     nearestAllowed: (value, values) => values.reduce((a, b) => Math.abs(a - value) <= Math.abs(b - value) ? a : b),
     clamp: (v, min, max) => Math.min(max, Math.max(min, v)),
     updateMixerAppearance() {}, savePreferences() {}, showToast() {}, renderPitchTrace() {},
@@ -43,6 +43,18 @@ function mixFixture() {
     'setPracticePart', 'setTrackAudible']) vm.runInContext(source(name), c);
   return c;
 }
+
+test('practice mix restoration preserves boosted volumes up to 200 percent', () => {
+  const c = mixFixture();
+  c.trackVolumes = [200, 175, 100, 0];
+  const before = plain(c.snapshotPracticeMix());
+  c.applyPracticeMix('learn');
+  assert.deepEqual(plain(c.normalizePracticeMixUndo(c.practiceMixUndo)), before);
+  c.applyPracticeMix('learn');
+  assert.deepEqual(plain(c.snapshotPracticeMix()), before);
+  assert.deepEqual(plain(c.normalizePracticeMixUndo({...before, volumes: [250, -5, 180, 160]})).volumes,
+    [200, 0, 180, 160]);
+});
 
 test('pan holds separate the held part, then center everyone without changing the vocal mix', () => {
   for (const count of [1, 3, 4, 8]) {

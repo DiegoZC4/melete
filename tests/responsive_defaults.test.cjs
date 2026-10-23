@@ -19,3 +19,14 @@ test('shared mobile defaults match Get It Right while explicit song scales still
     assert.equal(context.preferenceDefaults().horizontal, 100);
   }
 });
+
+test('song volume defaults allow a 200 percent ceiling with 100 percent as normal', () => {
+  const context = vm.createContext({
+    window: {matchMedia: () => ({matches: false})}, config: {defaults: {volumes: [200, 175, 250, -5]}},
+    parts: Array(5).fill({}), nearestAllowed: value => value,
+    clamp: (value, low, high) => Math.max(low, Math.min(high, value)),
+    TEMPO_VALUES: [], METRONOME_VALUES: [], VERTICAL_VALUES: [], HORIZONTAL_VALUES: [], PAN_VALUES: [],
+  });
+  vm.runInContext(app.split('\n').find(line => line.includes('const VOLUME_VALUES =')) + '\n' + source, context);
+  assert.deepEqual(Array.from(context.preferenceDefaults().volumes), [200, 175, 200, 0, 100]);
+});

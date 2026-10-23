@@ -398,6 +398,11 @@ reloads without an active preset session. Tooltips describe the next action.
 This targets the held singer without changing the chosen practice part and
 leaves percussion untouched. Shift+Enter is the keyboard equivalent;
 dragging still adjusts volume, and right-click still resets the number.
+Part volumes run from 0% to 200% in 5% steps, with 100% as the normal level.
+Drag the Vol row label to raise or lower every part. Each part stops independently
+at 0% or 200%; it never blocks the others. The uninterrupted drag remembers each
+starting level, so dragging past a limit and back restores the original balance.
+Pan row dragging has the same independent limits and return behavior.
 An active preset follows explicit changes to the chosen practice part while
 keeping the original Hear/Vol snapshot. Resetting that choice restores the
 snapshot, including across reloads; completing the volume-hold cycle instead
